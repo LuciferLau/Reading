@@ -2,8 +2,24 @@
 
 ## 目录
 第二章 [内存寻址](https://github.com/LuciferLau/Reading/edit/main/%E3%80%8A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Linux%E5%86%85%E6%A0%B8%E3%80%8B.md#%E7%AC%AC%E4%BA%8C%E7%AB%A0-%E5%86%85%E5%AD%98%E5%AF%BB%E5%9D%80)  
+第三章 [进程]()  
+第四章 [中断和异常](https://github.com/LuciferLau/Reading/edit/main/%E3%80%8A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Linux%E5%86%85%E6%A0%B8%E3%80%8B.md#%E7%AC%AC%E5%9B%9B%E7%AB%A0-%E4%B8%AD%E6%96%AD%E5%92%8C%E5%BC%82%E5%B8%B8)  
+第五章 [内核同步]()  
+第六章 [定时测量]()  
+第七章 [进程调度]()  
 第八章 [内存管理](https://github.com/LuciferLau/Reading/edit/main/%E3%80%8A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Linux%E5%86%85%E6%A0%B8%E3%80%8B.md#%E7%AC%AC%E5%85%AB%E7%AB%A0-%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86)  
 第九章 [进程地址空间](https://github.com/LuciferLau/Reading/edit/main/%E3%80%8A%E6%B7%B1%E5%85%A5%E7%90%86%E8%A7%A3Linux%E5%86%85%E6%A0%B8%E3%80%8B.md#%E7%AC%AC%E4%B9%9D%E7%AB%A0-%E8%BF%9B%E7%A8%8B%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4)  
+第十章 [系统调用]()  
+十一章 [信号]()  
+十二章 [虚拟文件系统]()  
+十三章 [I/O体系结构和设备驱动程序]()  
+十四章 [块设备驱动程序]()  
+十五章 [页高速缓存]()  
+十六章 [访问文件]()  
+十七章 [回收页框]()  
+十八章 [Ext2和Ext3文件系统]()  
+十九章 [进程通信]()  
+二十章 [程序的执行]()  
 
 ---
 ## 第二章 内存寻址
@@ -64,7 +80,7 @@ x86_64 | 4KB | 48 | 4 | 9 + 9 + 9 + 12
 以脉冲突发模式(burst mode)在慢速的DRAM和快速SRAM之间传送，用于实现高速缓存。  
 现代CPU中的 L1-cache, L2-cache, L3-cache（快->慢）就是高速缓存，实现了RAM中的行和高速缓存的映射。 
 
-### 转化后院缓冲器 Translation Lookaside Buffer (TLB)
+### 转化后援缓冲器 Translation Lookaside Buffer (TLB)
 当一个线性地址初次被使用时，通过慢速访问RAM中的页表计算出相应的物理地址，  
 同时，物理地址被放在一个TLB表项中，后续对同一个线性地址的引用可以快速转换。  
 多处理器系统中，每个CPU都有自己TLB，称为本地TLB，与硬件高速缓存相反，  
@@ -84,6 +100,13 @@ Linux采用了一种32/64位通用的分页模型，直到2.6.10版本采用三�
 - 页框0由BIOS用于存放加电自检（Power-On Self-Test, POST），还可能将数据写到该页框。
 - 从 0x000A0000 到 0x000FFFFF 即 640KB 到 1MB 通常留给BIOS例程，所有IBM兼容PC上著名的洞？
 - 第一个MB内的其他页框可能由特定的计算机模型保留。如IBM Thinkpnd把 0xa0 页框映射到 0x9f 页框。
+
+---
+
+## 第四章 中断和异常
+> 中断通常分为 同步中断 和 异步中断：  
+> 同步中断是当指令执行时，由CPU控制单元产生的，之所以称为同步，是因为只在一条指令执行终止后，CPU才会发出中断。  
+> 异步中断是由其他硬件设备，依照CPU时钟信号随机产生的。  
 
 ---
 

@@ -78,4 +78,72 @@ sort({"key":1/-1})：按key升/降序排序
 数据库命令：runCommand()，可用 db.listCommand() 查看  
 
 # Chapter5：索引
-> 根本目的：减少查询次数，提高查询速度，可用 db.foo.find().explain() 查看查询过程做的事。  
+> 根本目的：减少查询次数，提高查询速度，可用 db.foo.find().explain() 查看查询过程做的事；  
+> 每个集合限制 64 个索引，通常在一个特定集合上不应该有 2 个或以上的索引；  
+> 对 1 个以上的key同时建立索引，那就是复合索引。  、
+
+- explain 各项指标说明  
+tag | desc
+-- | :--
+cursor | 可以是 BtreeCursor / BasicCursor 前者说明适用了索引
+isMultiKey | 是否使用多键索引
+n | 返回 document 数量
+nscannedObjects | 查询磁盘上实际 document 数量
+nscanned | 查询 document 数量，如果使用了索引就是检查过索引的数量
+scanAndOrder | 是否在内存中对结果集进行排序
+indexOnly | 是否只使用了索引完成查询
+nYields | 挂起次数，有写入请求时会暂停让写请求先执行
+millis | 本次查询消耗毫秒时
+indexBounds | 索引的遍历范围
+
+- 何时不应该使用索引
+原则：结果集占数据集的比例越大，索引的速度就越慢，最坏情况下会是全表扫描的 2 倍查询次数（1次索引 + 1次查文档）  
+
+# Chapter6：特殊的索引和集合
+（略）
+
+# Chapter7：聚合
+> MongoDB提供了聚合框架，MapReduce，聚合命令如count、distinct、group这些聚合工具  
+- 聚合框架  
+  + 算数表达式  
+  $add：加  
+  $subtract：减  
+  $multiply：乘  
+  $divide：除  
+  $mod：模  
+  + 字符串表达式  
+  $substr：子串
+  $concat：连接
+  $toLower：小写
+  $toUpper：大写
+  + 逻辑表达式  
+  $cmp：真>0，等=0，假<0
+  $strcasecmp：比较字符串，区分大小写
+  $eq：$ne：$gt：$gte：$lt：$lte：$and：$or：$not：略，前面提及  
+  $cond：cond？true：false；类似Cpp的条件表达式
+  $ifNull：expr？expr2；如果是null，返回expr2，否则返回expr
+```
+以书中例子介绍聚合框架及其操作符：  
+db.aggregate({$project:{"author":1}},
+  {$group:{"_id":"$author", "count":{"$sum":1}}},
+  {$sort:{"count":-1}},
+  {$limit:5})  
+  
+$project：从 document 中提取字段，甚至可以重命名字段，并且不会影响原数据，这里把author提取出来  
+$match：用于筛选条件，可以使用所有常规的查询操作符  
+$group：根据 document 中的字段分组，并且可以对其进行表达式运算：$sum求和，$avg求平均，$max/min取最值，$first/last取分值首尾值，$addToSet/push为数组尝试添加值  
+$unwind：将数组中的每个值拆分为单独的 document  
+$sort：对单个或多个字段进行排序，这里对count进行排序  
+$limit：限制结果集的数量，这里限制前5个结果  
+$skip：丢弃结果集的n个结果  
+```
+
+- MapReduce  
+（略），简单来说是将大任务可以通过 map 映射，洗牌分组，然后 reduce 化简，重复洗牌直至剩下一个值。  
+用于大问题拆分到多个小问题由不同机器处理，利用了分布式的思想，但游戏服一般不需要这种重量级操作。  
+
+- 聚合命令  
+count()：返回 document 数量
+distinct：获取给定 key 的不同 val  
+
+# Chapter8：应用程序设计

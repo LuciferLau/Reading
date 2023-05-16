@@ -154,7 +154,7 @@ distinct：获取给定 key 的不同 val
 > 如果 primary 宕机了，会选一个 secondary 来成为新的 primary
 （创建副本集接口的介绍/使用略过）
 
-# Chapter10：副本集的组成
+# Chapter10：副本集的组成⭐
 - 同步
 复制功能由 oplog 操作日志实现，日志中记录了 primary 中每一次写操作，是主节点local数据库中的一个固定集合（参考Chap6）；  
 每个 secondary 中也维护着自己的 oplog，记录每次从 primary 中复制数据的操作，每个成员都可以作为同步源提供给其他节点读取；  
@@ -191,7 +191,7 @@ PS：数据量 >300 MB 或 操作时间 >30 min 时，回滚操作会失败（�
 mongos：维护着内容列表，指明了每个分片有什么数据内容，对客户端来说，连接到mongos就想连接到单机mongod一样无感  
 sh命令：类似rs命令(副本集的命令)，有许多辅助函数用于管理分片  
 
-# Chapter14：配置分片
+# Chapter14：配置分片🌟
 > 使用分片是为了：增加单机可用RAM/ROM；减轻单机负载；提高QPS  
 - configServer  
 实际上是一个普通的mongod服务器，用 --configsvr 选项启动，要先于其他进程启动（因为mongos从这里拉取配置）  
@@ -204,6 +204,94 @@ sh命令：类似rs命令(副本集的命令)，有许多辅助函数用于管�
 > 这样会引出2个问题，  
 > 1：mongos节点如果处于不稳定状态，重启后，计数器会重置导致，导致块不断膨胀无法分割  
 > 2：mongod configSvr如果处于不可达（网络等问题），mongos无法更新元数据，不断收到写请求时，会循环尝试向configSvr发送拆分请求  
+- 均衡器  
+负责数据的迁移，周期性检查分片间是否存在不平衡，如果存在就进行块的迁移；  
+虽然均衡器被看做单一实体，但有时mongos也会扮演均衡器的角色。  
+> config.lock 集合中 \_id 为 “balancer” 的就是均衡器，state 0【非活跃】1【尝试加锁中】2【均衡中】  
+
+# Chapter15：选择片键
+> 片键：指用于拆分 collection 时使用的 document 里的 key
+> 因为分片完成后修改它几乎是不可能的，正确地选择片键，才能体现出分片的优势，更好的实现数据分发  
+- 散列片键：数据加载极快，但对范围查询不友好（因为做了hash）  
+- 流水策略：用配置较好的机器处理数据插入，然后通过均衡器将数据转移到配置相对差的服务器  
+- 多热点：通过设计复合片键，尽量将热点数据分布到不同的分片
+> 除非特殊情况，否则都应该使用自动而非手动分片，尤其是均衡器还在开启的情况下  
+
+# Chapter16：分片管理
+👉 sh.status()  
+块较少时打印每个块的位置，较多时打印块的概述，可以传参true以获取详情  
+👉 mongos.config.shards  
+记录集群内所有分片的信息  
+👉 mongos.config.database  
+记录集群内所有数据库的信息  
+👉 mongos.config.collection  
+记录集群内所有"分片"集合的信息  
+👉 mongos.config.chunks  
+记录集群内所有块的信息  
+👉 mongos.config.changelog  
+记录集群的操作（块的拆分/迁移）  
+👉 mongos.config.tag  
+记录分片标签(tag)的范围(min,max)  
+👉 mongos.config.settings  
+记录均衡器设置和块大小信息  
+
+- 服务器相关  
+  + 添加服务器：addShard
+  + 修改分片的服务器：直连到分片所在服，修改其config.shards
+  + 删除分片：不推荐，一般分片在未来都可能被使用，如果强行删除必须保证均衡器开启，数据正常排出
+  + 修改配置服务器：
+> 修改配置服务器 configSvr 是有风险的，通常需要停机，尽量通过修改 mongos 的配置来实现需求  
+> 修改前需要关闭所有 mongos 进程，保证它们 --configdb 一致，关闭所有分片  
+
+- 数据均衡
+  + 修改块大小：默认为 64MB，通过修改 mongos 的 config.settings 中 chunksize 字段修改
+  + 移动块：sh.moveChunk 可以移动块，sh.splitAt 可以拆分过大的块
+  + 特大块：指超过了 chunksize 的块，无法被拆分（由于片键值的设置原因，如按日期做分片）
+
+> 在执行几乎所有的数据库管理操作之前，都应关闭均衡器
+
+# Chapter17：了解应用的动态
+> 学会知道当前 MongoDB 在做什么，什么操作耗时较大  
+
+db.currentOp()：获取当前正在执行的操作，及其详情  
+db.killOp(opid)：终止opid对应的操作  
+db.setProfilingLevel(lev)：根据分析等级，开关分析器，记录在 system.profile 集合中   
+> 分析等级：【0】表示关闭，【1,100】表示记录耗时大于100ms的操作，【2】表示记录所有内容  
+
+db.getProfilingLevel()：获取当前分析等级  
+Object.bsonsize({\_id:ObjectId})：查询文档大小  
+db.col.stats()：查询集合信息  
+db.stats()：查询数据库信息
+
+mongotop / mongostat：略，前类似top，后输出部分netstat和vmstat/sar的东西
+
+# Chapter18：数据管理
+（略）
+
+# Chapter19：持久性
+MongoDB 使用日记系统来实现它的“持久性”（因为不存在事务，所以持久性含义有所不同）  
+每个写操作，都会产生一条日记 journal，记录了更改的磁盘地址和字节数；  
+假设服务器宕机了，可以进行回放 replay，重新执行那些还未刷新 flush 到磁盘的写入操作。  
+
+数据文件默认每 60s 刷新一次到磁盘，而MongoDB默认每隔 100ms 就会将写入数据的操作写入日记；  
+即默认情况下，丢失的写入数据不会超过100ms，可通过 setParam 命令改变 journalCommitInterval 的值(2~500)    
+重要写入可以用 getLastError("j":true) 来确保写入操作成功写入日志（最多等待30ms）  
+
+> 持久性无法保证的情况：硬盘写入还未实际完成，却已经返回完成（因为硬件问题），此刻宕机数据丢失，副本集可以解决部分问题  
+> db.col.validate()：可以用检测集合是否损坏，输出结果的 valid 字段true则为完好  
+
+# Chapter20：启动和停止MongoDB
+（略，擅用 mongod --help 即可）
+
+# Chapter21：监控MongoDB
+（略，暂未能使用到 MMS 这种服务）
+
+# Chapter21：备份
+
+
+
+
+
 
 
 

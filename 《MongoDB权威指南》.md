@@ -37,7 +37,7 @@ document 可以动态填充，也可预分配空间换性能，对索引进行 c
   + 二进制数据：非UTF-8字符存储方式
   + 代码：JS代码  
  
-Object ID 是 "\_id" 的默认类型：timestamp | name | pid | counter
+Object ID 是 "\_id" 的默认类型：timestamp | name | pid | counter  
 0-3 4字节用文档创建时间戳转化，  
 4-6 3字节由机器名转化，  
 7-8 2字节由当前进程PID转化，  
@@ -286,11 +286,49 @@ MongoDB 使用日记系统来实现它的“持久性”（因为不存在事务
 # Chapter21：监控MongoDB
 （略，暂未能使用到 MMS 这种服务）
 
-# Chapter21：备份
+# Chapter22：备份
+- 文件系统快照 snapshot  
+  系统支持快照，且mongod开启了journal
+- 复制数据文件  
+  将数据目录 /data/db 的文件全部复制到其他地方，要防止数据文件改变可用 db.fsynclock() 锁定数据库，并且将脏页刷新至磁盘  
+- mongodump  
+  备份和恢复速度较慢，处理副本集需加 --oplog 获取快照，恢复时需要 --oplogReplay 回放快照  
+> 不可能对运行中的分片集群进行“完美的”备份  
+> 在备份集群时，需先关闭 balancer 然后通过 mongos 运行 mongodump，恢复时也是对一个 mongos 运行 mongorestore  
 
+- mongooplog(mon-goop-log)  
+  增量备份，是最复杂的技术。假设有2台机器组成副本集，primary为A，secondary为B。  
+  1、记录A的oplog最近一次optime；  
+  2、对A进行一次完整备份，使用上述的任意方法，把这个备份的数据恢复到B；  
+  3、定期添加A中的数据到B，在B机器上运行 mongooplog --from A --second (时间差值[now - optime] + 冗余的若干秒防止数据丢失)  
+  
+# Chapter23：部署MongoDB
+（略）  
+> 并没有钱自行部署mongo专用服务器，只能参考其中部分思想，  
+> 但如 NUMA 和 大内存页 这种都是操作系统提供来优化其他程序运行效率的，  
+> 关闭了虽然可能提高了 MongoDB 的表现，实际上可能得不偿失，具体情况具体分析。  
 
+# 附录A：安装MongoDB
+（略）  
 
+# 附录A：深入MongoDB
+- BSON —— Binary JSON  
+  + 高效：描述数据最差情况比JSON效率略低，最好情况远超JSON  
+  + 可遍历性：如给字符串数据加上长度字段，使其不依赖'\0'  
+  + 高性能：编解码快速，用类C类型表示  
+- 网络协议 wire protocol
+一个轻量的 TCP/IP 协议，对 BSON 数据进行包装，20字节的首部包含了各种操作信息  
+- 数据文件  
+每个数据库对应若干文件，如 foo 库会有 foo.ns foo.0 foo.1 foo.2 ...  
+每个数据文件大小是前者的 2倍 直至达到最大值 2GB  
+这样做保证了稳定的性能表现，默认还会预分配数据文件，用 --noprealloc 选项可关闭  
+- 命名空间和区段  
+collection 中的 document 和 索引 都有自己的命名空间，命名空间的元信息存储于 .ns 文件中  
+每个命名空间中的数据在磁盘上都会被分为几组数据文件，即区段  
 
+- 内存映射存储引擎  
+MongoDB 唯一支持的存储引擎就是 内存映射引擎，在服务器启动的时候，将所有数据文件映射到内存  
+然后由 操作系统 负责将数据刷新到磁盘，以及管理内存中的数据页交换（应用层的内存管理较少？）  
 
 
 

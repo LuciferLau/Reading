@@ -180,4 +180,12 @@ I/O密集型说明可能出现了慢查询的问题，需要定位问题所在�
 ```
 我们可以建立一个坐标系，在二维平面上描绘出这些数据，  
 针对某一个 document，我们对其画圆，找出其周边相邻范围 n 内的点，MongoDB 提供了 $near 操作符  
+首先建立二维索引：db.col.ensureIndex({ location : '2d'})  
+然后就可以对其进行查询，比如查询（12,34）附近的点  
+db.col.find({'loc' : {$near : [12,34]}})  
+返回结果默认限制在 100 条，可以用 limit 调整结果集大小  
 
+当然更高级的，可以使用 geoNear 命令：  
+db.runCommand({'geoNear' : 'col', near : [12,34], num : 2})  
+命令返回 2 个结果，甚至会返回 dis 字段告诉你空间点之间的距离  
+还有 within center box maxDistance 球面的 nearSphere centerSphere 等操作符的混合使用，这里暂不深究  

@@ -7,4 +7,4 @@
 ### [MongoDB实战](https://github.com/LuciferLau/Reading/blob/main/%E3%80%8AMongoDB%E5%AE%9E%E6%88%98%E3%80%8B.md)  
 
 ## 脚本
-### [Lua设计与实现]()
+### [Lua设计与实现](https://github.com/LuciferLau/Reading/blob/main/%E3%80%8ALua%E8%AE%BE%E8%AE%A1%E4%B8%8E%E5%AE%9E%E7%8E%B0%E3%80%8B.md)

@@ -335,7 +335,37 @@ void luaS_resize (lua_State *L, int nsize) {
 > Lua 的招牌菜——表，使用极其便利，几乎支持任意类型的 k-v 键值对  
 > 但使用不当可能会造成效率低性能差的问题，通过研究源代码，让我们逐步揭开它方便好使的背后逻辑  
 - 表的数据结构（v5.4.2）
+```
+typedef union Node {
+  struct NodeKey {
+    TValuefields;  /* fields for value */
+    lu_byte key_tt;  /* key type */
+    int next;  /* for chaining */
+    Value key_val;  /* key value */
+  } u;
+  TValue i_val;  /* direct access to node's value as a proper 'TValue' */
+} Node;
 
+typedef struct Table {
+  CommonHeader;
+  lu_byte flags;  /* 1<<p means tagmethod(p) is not present */ 标记表的元方法是否提供
+  lu_byte lsizenode;  /* log2 of size of 'node' array */ log2(size)的值，说明size是2的指数，上面提到的 size&(size-1)
+  unsigned int alimit;  /* "limit" of 'array' array */ 数组大小，有2种含义
+  TValue *array;  /* array part */ 普通数组
+  Node *node; // 指向hash数组起始位
+  Node *lastfree;  /* any free position is before this position */ 指向hash数组空闲位
+  struct Table *metatable; // 元表
+  GCObject *gclist;
+} Table;
+```
+> About 'alimit': if 'isrealasize(t)' is true, then 'alimit' is the real size of 'array'.   
+> Otherwise, the real size of 'array' is the smallest power of two not smaller than 'alimit' (or zero iff 'alimit'is zero);   
+> 'alimit' is then used as a hint for #t.  
+> iff：当且仅当。翻译一下，就是当 isrealasize 返回 true 时alimit是array的真实大小  
+> 否则 array 的大小是不小于 alimit 的最小的 2<sup>n</sup>，当且仅当 alimit=0 时，array大小是0  
+> 比如说alimit=7，那大小其实就是8，alimit=25，大小其实就是32，保证数组大小是 pow(2) 是有益的  
+
+短短几行定义，就可以实现那么复杂的功能，不得不说招牌菜就是香，
 
 
 

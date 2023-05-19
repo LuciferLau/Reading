@@ -401,7 +401,7 @@ LUAI_FUNC unsigned int luaH_realasize (const Table *t) {
 
 - 表的一些访问宏  
 ``` c
-#define gnode(t,i)	(&(t)->node[6])
+#define gnode(t,i)	(&(t)->node[i])
 #define gval(n)		(&(n)->i_val)
 #define gnext(n)	((n)->u.next)
 ```
@@ -627,9 +627,29 @@ static Node *getfreepos (Table *t) {
 这部分逻辑比较简单，从上面创建表的过程中，我们可以发现 lastfree 的指向并没有改版  
 实际上，他是在 创表luaH_new 或者 扩/缩容luaH_resize 的时候指向了哈希数组的末尾(通过setnodevector)  
 然后在后续使用的时候通过 自减 的方式找空位，找到了此时的指向就是从后往前第一个空节点了  
-- Node.i_val 和 table.array
-这二者的赋值，都在 luaH_setint 的时候  
+
+- 哈希节点的获取
 ``` c
+static const TValue absentkey = {ABSTKEYCONSTANT};
+// value_ = {NULL}; tt_ = LUA_VABSTKEY;
+
+const TValue *luaH_get (Table *t, const TValue *key) {
+  switch (ttypetag(key)) { // key->tt_
+    case LUA_VSHRSTR: return luaH_getshortstr(t, tsvalue(key));
+    case LUA_VNUMINT: return luaH_getint(t, ivalue(key));
+    case LUA_VNIL: return &absentkey;
+    case LUA_VNUMFLT: {
+      lua_Integer k;
+      if (luaV_flttointeger(fltvalue(key), &k, F2Ieq)) /* integral index? */
+        return luaH_getint(t, k);  /* use specialized version */
+      /* else... */
+    }  /* FALLTHROUGH */
+    default:
+      return getgeneric(t, key, 0);
+  }
+}
+
+// LUA_NUMBER 包括 FLOAT 和 INT 都是最终走 getint，只有不带整数值的float能走到通用接口
 const TValue *luaH_getint (Table *t, lua_Integer key) {
   if (l_castS2U(key) - 1u < t->alimit)  /* 'key' in [1, t->alimit]? */
     return &t->array[key - 1]; // 整形值在数组范围内，返回数组对应位置引用
@@ -658,6 +678,42 @@ const TValue *luaH_getint (Table *t, lua_Integer key) {
   }
 }
 
+// LUA_TSTRING 的 LUA_VSHRSTR 使用，LUA_VLNGSTR 走通用接口
+const TValue *luaH_getshortstr (Table *t, TString *key) {
+  Node *n = hashstr(t, key);
+  lua_assert(key->tt == LUA_VSHRSTR);
+  for (;;) {  /* check whether 'key' is somewhere in the chain */
+    if (keyisshrstr(n) && eqshrstr(keystrval(n), key))
+      return gval(n);  /* that's it */
+    else {
+      int nx = gnext(n);
+      if (nx == 0)
+        return &absentkey;  /* not found */
+      n += nx;
+    }
+  }
+}
+
+// 其余数据类型通用接口
+static const TValue *getgeneric (Table *t, const TValue *key, int deadok) {
+  Node *n = mainpositionTV(t, key);
+  for (;;) {  /* check whether 'key' is somewhere in the chain */
+    if (equalkey(key, n, deadok))
+      return gval(n);  /* that's it */
+    else {
+      int nx = gnext(n);
+      if (nx == 0)
+        return &absentkey;  /* not found */
+      n += nx;
+    }
+  }
+}
+```
+> 在对浮点型处理时，根据 mode 可以使用不同的 floor 函数，可以参考 [floor, floorf, floorl](https://en.cppreference.com/w/c/numeric/math/floor)  
+
+- Node.i_val 和 table.array
+这二者的赋值，都可以在 luaH_setint 的时候找到例子，但前者更为广泛  
+``` c
 void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
   const TValue *p = luaH_getint(t, key); // 找不到时返回 absentKey，否则返回 array的位置 或者 hashtable里的i_val
   TValue *cell;
@@ -696,24 +752,39 @@ void luaH_resize (lua_State *L, Table *t, unsigned int newasize, unsigned int nh
         luaH_setint(L, t, i + 1, &t->array[i]);
     }
     t->alimit = oldasize;  /* restore current size... */ 把alimit还原回去
-    exchangehashpart(t, &newt);  /* and hash (in case of errors) */ 再把哈希部分的字段交换回来
+    exchangehashpart(t, &newt);  /* and hash (in case of errors) */ 再把哈希部分的字段交换回来，这时新的哈希表
   }
   
-  /* allocate new array */
-  newarray = luaM_reallocvector(L, t->array, oldasize, newasize, TValue);
+  // 为新array数组分配空间，这里可能会失败，要对异常处理
+  newarray = luaM_reallocvector(L, t->array, oldasize, newasize, TValue); 
   if (unlikely(newarray == NULL && newasize > 0)) {  /* allocation failed? */
-    freehash(L, &newt);  /* release new hash part */
-    luaM_error(L);  /* raise error (with array unchanged) */
+    freehash(L, &newt);  /* release new hash part */ 释放新表
+    luaM_error(L);  /* raise error (with array unchanged) */ 抛出 ERROR，可能在这里就abort了
   }
-  /* allocation ok; initialize new part of the array */
-  exchangehashpart(t, &newt);  /* 't' has the new hash ('newt' has the old) */
-  t->array = newarray;  /* set new array part */
-  t->alimit = newasize;
-  for (i = oldasize; i < newasize; i++)  /* clear new slice of the array */
-     setempty(&t->array[i]);
+  
+  // 新array数组分配完成，要对其赋值了（刚刚只操作了哈希表没操作array）
+  exchangehashpart(t, &newt);  /* 't' has the new hash ('newt' has the old) */ 再次进行哈希部分字段交换，此时新的哈希表在 t 这里
+  t->array = newarray;  /* set new array part */  因为是 realloc 所以直接指向新数组即可
+  t->alimit = newasize; // 更改alimit，此时不是假装了是真的变了，且 isrealsize(t) 为 true
+  for (i = oldasize; i < newasize; i++)  /* clear new slice of the array */ 缩容其实啥也不做
+     setempty(&t->array[i]);	// 扩容时将多出来的部分初始化为 LUA_VEMPTY
   /* re-insert elements from old hash part into new parts */
   reinsert(L, &newt, t);  /* 'newt' now has the old hash */
   freehash(L, &newt);  /* free old hash part */
+}
+
+static void reinsert (lua_State *L, Table *ot, Table *t) {
+  int j;
+  int size = sizenode(ot);
+  for (j = 0; j < size; j++) {
+    Node *old = gnode(ot, j);
+    if (!isempty(gval(old))) { // i_val非LUA_VEMPTY
+      /* doesn't need barrier/invalidate cache, as entry was already present in the table */
+      TValue k;
+      getnodekey(L, &k, old); // k->value_ = old->u.key_val k->tt_ = old->u.key_tt
+      setobjt2t(L, luaH_set(L, t, &k), gval(old)); // 在t中获取节点，将i_val赋值过去
+    }
+  }
 }
 
 void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize) {

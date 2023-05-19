@@ -4,7 +4,7 @@
 - 名字含义  
 葡萄牙语中 SOL（simple object language，Lua的前身）的含义是太阳，Lua 的意思是月亮，可能这也是 Lua icon 样式的由来 🌕🌔  
 - Lua目录结构（v5.4.2）  
-```
+``` c
 /* 虚拟机 */
 // LUA接口辅助库
 lapi.c
@@ -113,7 +113,7 @@ lzio.h
 # Chap 2. Lua 中的数据类型
 > 本章的数据结构基本都在 lobject.h 定义，读者可以根据自己本地的 Lua 版本阅读源码  
 - Lua基本数据类型（v5.4.2）  
-```
+``` c
 #define LUA_TNONE		(-1)        // 无
 #define LUA_TNIL		0           // nil值
 #define LUA_TBOOLEAN		1       // 布尔值
@@ -137,7 +137,7 @@ lzio.h
 > 因为 Lua 用标准C实现，所以没有用到cpp的class，用struct配合union实现了类的“多态”  
 > 这里的 TValue 就是一个标准的 variant可变体 允许在运行时决定变量的类型  
 > CPP17里也提供了 std::variant 库实现类似的行为  
-```
+``` c
 typedef unsigned char lu_byte;
 #define CommonHeader	struct GCObject *next; lu_byte tt; lu_byte marked
 #define TValuefields	Value value_; lu_byte tt_
@@ -166,7 +166,7 @@ value_ 字段则描述了数据详情，因为用的是 union，控制内存大�
 > 类似 const char* 的字符串，Lua也为自己维护了一份字符串“常量”表，对于相同的字符串，设计成访问相同的地址诚然是较好的  
 > 书中称之为 internalization 内化，相同的数据不使用副本，而是复用它的引用  
 - 字符串数据结构（v5.4.2）  
-```
+``` c
 #define LUA_VSHRSTR	makevariant(LUA_TSTRING, 0)  /* short strings */
 #define LUA_VLNGSTR	makevariant(LUA_TSTRING, 1)  /* long strings */
 
@@ -184,7 +184,7 @@ typedef struct TString {
 ```
 从官方备注可知，字符串类型内还分了长短两种类型，它们根据长度区分，内容显然是存储在 contents 数组了，  
 那么短字符串呢，我们接着往下看  
-```
+``` c
 #define LUAI_MAXSHORTLEN	40 
 #define getstr(ts)  ((ts)->contents)
 
@@ -203,7 +203,7 @@ TString *luaS_newlstr (lua_State *L, const char *str, size_t l) {
 ```
 从初始化函数可知，大于40字节的被归类为长字符串，下面分别看看两种字符串的初始化方式  
 - LUA_VLNGSTR
-```
+``` c
 static TString *createstrobj (lua_State *L, size_t l, int tag, unsigned int h) {
   TString *ts;
   GCObject *o; // Lua对象基本都需要垃圾回收，所以都会由o这个万能union转化
@@ -227,7 +227,7 @@ TString *luaS_createlngstrobj (lua_State *L, size_t l) {
 最后把 str 的内容通过 memcpy 复制到 contents 里面  
 
 - LUA_VSHRSTR
-```
+``` c
 #define check_exp(c,e)		(lua_assert(c), (e))
 #define lmod(s,size) \   
 	(check_exp((size&(size-1))==0, (cast_int((s) & ((size)-1)))  ))
@@ -274,7 +274,7 @@ static TString *internshrstr (lua_State *L, const char *str, size_t l) {
 算出在数组中的位置后，就可以遍历该位置的链表了，查找等长且内存相同（const char*）的短字符串  
 在找不到的时候，其实也是正常创建一个新对象然后 memcpy，但因为hash开链表需要把新对象头插到 list 里  
 并且短字符因为有 stringtable 这一层缓存，还可能存在扩容的情况，所以可以关心一下扩容的方式  
-```
+``` c
 #define MAX_SIZET	((size_t)(~(size_t)0)) //对0求反码，获取全1的最大值
 #define MAX_INT		INT_MAX  /* maximum value of an int */
 #define luaM_limitN(n,t)  \ //把INT_MAX强转为size_t，然后与 MAX_SIZET和sizeof(TSTRING*) 的余数比较，返回较小的一个
@@ -337,7 +337,7 @@ void luaS_resize (lua_State *L, int nsize) {
 > Lua 的招牌菜——表，使用极其便利，几乎支持任意类型的 k-v 键值对  
 > 但使用不当可能会造成效率低性能差的问题，通过研究源代码，让我们逐步揭开它方便好使的背后逻辑  
 - 表的数据结构（v5.4.2）
-```
+``` c
 typedef union Node {
   struct NodeKey {
     TValuefields;  /* fields for value */
@@ -368,18 +368,29 @@ typedef struct Table {
 > 比如说alimit=7，那大小其实就是8，alimit=25，大小其实就是32，保证数组大小是 pow(2) 是有益的  
 
 - 表的一些访问宏  
-```
+``` c
 #define gnode(t,i)	(&(t)->node[6])
 #define gval(n)		(&(n)->i_val)
 #define gnext(n)	((n)->u.next)
 ```
 
 - Hash Node  
+	+ TValuefields  
+	
+	+ key_tt：lu_byte  
+	
+	+ key_val：Value  
+	+ next：int  
+	指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置 
+	
+	
 看看哈希节点的定义吧，一个 union 里包含着 u 和 i_val 两个数据结构  
 因为是union所以二者只出现一个，那么它们各自在什么时候出现呢(TODO)  
+
+    
 在介绍 table 的构造之前，需要先介绍一下2个辅助数据结构，分别是 dummyNode 和 mainposition 
 - dummyNode  
-```
+``` c
 #define dummynode		(&dummynode_)
 static const Node dummynode_ = {
   {{NULL}, LUA_VEMPTY,  /* value's value and type */
@@ -395,10 +406,10 @@ dummynode_.u.key_val = {NULL};		// Value(union)
 声明一个全局静态常量节点，并且将其各种变量定义为空指针/空值  
 这个空节点其实是用了判断Hash数组是否为空的，也是一种常见的编程方式（头前节点？）  
 
-- mainposition  
+- mainposition与哈希算法  
 因为LUA表使用开地址法处理哈希冲突，导致一个问题就是：后来的新key经过hash后，发现自己的节点被占用  
 一个 key 经过 hash 后得到的未处理过的值，称为这个 key 的 mainposition首要位置  
-```
+``` c
 #define twoto(x)	(1<<(x))
 #define sizenode(t)	(twoto((t)->lsizenode))
 // 默认数据类型
@@ -453,6 +464,132 @@ static Node *mainposition (const Table *t, int ktt, const Value *kvl) {
 用 pow2数 去取模，hash冲突会十分严重，±1后补1，就可以避免这一点  
 
 > [可参考](https://www.zhihu.com/question/20806796)  
+
+- 表的创建
+``` c
+int luaO_ceillog2 (unsigned int x) {
+  static const lu_byte log_2[256] = {  /* log_2[i] = ceil(log2(i - 1)) */
+    0,1,2,2,3,3,3,3, 4,4,4,4,4,4,4,4, 5,5,5,5,5,5,5,5, 5,5,5,5,5,5,5,5,
+    6,6,6,6,6,6,6,6, 6,6,6,6,6,6,6,6, 6,6,6,6,6,6,6,6, 6,6,6,6,6,6,6,6,
+    7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7,
+    7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7,
+    8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8,
+    8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8, 8,8,8,8,8,8,8,8
+  };
+  int l = 0;
+  x--; // 修正数组下标，兼容边界情况
+  while (x >= 256) { l += 8; x >>= 8; } // 大于等于256，log2的值每次可以+8，原值除256，进入下一轮
+  return l + log_2[x]; //空间换时间
+}
+
+static void setnodevector (lua_State *L, Table *t, unsigned int size) {
+  if (size == 0) {  /* no elements to hash part? */
+    t->node = cast(Node *, dummynode);  /* use common 'dummynode' */
+    t->lsizenode = 0;
+    t->lastfree = NULL;  /* signal that it is using dummy node */
+  }
+  else {
+    int i;
+    int lsize = luaO_ceillog2(size); // 对log2的值向上取整
+    if (lsize > MAXHBITS || (1u << lsize) > MAXHSIZE)
+      luaG_runerror(L, "table overflow");
+    size = twoto(lsize);
+    t->node = luaM_newvector(L, size, Node);
+    for (i = 0; i < (int)size; i++) {
+      Node *n = gnode(t, i);
+      gnext(n) = 0;
+      setnilkey(n);
+      setempty(gval(n));
+    }
+    t->lsizenode = cast_byte(lsize);
+    t->lastfree = gnode(t, size);  /* all positions are free */
+  }
+}
+
+Table *luaH_new (lua_State *L) {
+  GCObject *o = luaC_newobj(L, LUA_VTABLE, sizeof(Table));
+  Table *t = gco2t(o);
+  t->metatable = NULL; // 元表为空
+  t->flags = cast_byte(maskflags);  /* table has no metamethod fields */ 无任何元方法
+  t->array = NULL; // 默认数值为空
+  t->alimit = 0; // 默认哈希表大小为0
+  // 初始化啥也没有，走size为0的逻辑：node指向&dummyNode_，lsizenode为0，lastfree为空
+  setnodevector(L, t, 0); 
+  return t;
+}
+```
+无论是什么类型，在Lua中都是需要先生成 GCObject 然后再强转为对应类型，Table也不例外  
+新表创建出来，啥也没有十分干净，非0即NULL，于是我们看看如何为它增添一些成员  
+- 表 k-v 的插入
+``` c
+TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
+  const TValue *p = luaH_get(t, key);
+  if (!isabstkey(p))
+    return cast(TValue *, p);
+  else return luaH_newkey(L, t, key);
+}
+
+TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
+  Node *mp; // 主位置节点
+  TValue aux; // 辅助值，浮点型专用
+  if (unlikely(ttisnil(key)))
+    luaG_runerror(L, "table index is nil");
+  else if (ttisfloat(key)) {
+    lua_Number f = fltvalue(key);
+    lua_Integer k;
+    if (luaV_flttointeger(f, &k, F2Ieq)) {  /* does key fit in an integer? */
+      setivalue(&aux, k); // 假设float能转为int，用转化后的新值代替
+      key = &aux;  /* insert it as an integer */
+    }
+    else if (unlikely(luai_numisnan(f)))
+      luaG_runerror(L, "table index is NaN");
+  }
+  mp = mainpositionTV(t, key); // 计算当前新值的主位置
+  if (!isempty(gval(mp)) || isdummy(t)) {  /* main position is taken? */ 主位置非空 或 空表
+    Node *othern; // 临时节点用于比较
+    Node *f = getfreepos(t);  /* get a free place */
+    if (f == NULL) {  /* cannot find a free place? */ 假设是空表，这里肯定会走到扩容，否则就是表被塞满的情况
+      rehash(L, t, key);  /* grow table */
+      /* whatever called 'newkey' takes care of TM cache */
+      return luaH_set(L, t, key);  /* insert key into grown table */ 扩容后重新走一遍newKey
+    }
+    lua_assert(!isdummy(t)); // 断言此时已经不可能为空表，因为前面刚刚做了扩容
+    othern = mainposition(t, keytt(mp), &keyval(mp)); // 获取主位置节点k-v的主位置
+    if (othern != mp) {  /* is colliding node out of its main position? */ 你是本来就该在这的，还是被赶过来的
+      /* yes; move colliding node into free position */ 如果是被赶过来的，我才是应该在这的，你让个位置吧
+      while (othern + gnext(othern) != mp)  /* find previous */
+        othern += gnext(othern);
+      gnext(othern) = cast_int(f - othern);  /* rechain to point to 'f' */
+      *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */
+      if (gnext(mp) != 0) {
+        gnext(f) += cast_int(mp - f);  /* correct 'next' */
+        gnext(mp) = 0;  /* now 'mp' is free */
+      }
+      setempty(gval(mp));
+    }
+    else {  /* colliding node is in its own main position */
+      /* new node will go into free position */
+      if (gnext(mp) != 0)
+        gnext(f) = cast_int((mp + gnext(mp)) - f);  /* chain new position */
+      else lua_assert(gnext(f) == 0);
+      gnext(mp) = cast_int(f - mp);
+      mp = f;
+    }
+  }
+  setnodekey(L, mp, key);
+  luaC_barrierback(L, obj2gco(t), key);
+  lua_assert(isempty(gval(mp)));
+  return gval(mp);
+}
+```
+在 luaH_newkey 中，比较容易令人迷惑的就是 mp != othern 这个不等的比较  
+前面提到，因为用开地址法处理哈希冲突，所以新节点算出来的主位置是没错  
+但可能占用了这个位置的节点，是因为它的主节点也被占用（mp所指节点产生了哈希冲突）  
+不得已才过来的；因此，对mp的 k-v 计算它实际的主节点是很必要的  
+如果发现这不是你地盘，你就该立马让个位出来，顺着 lastfree 找个位置呆着吧  
+
 
 
 

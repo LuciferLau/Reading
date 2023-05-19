@@ -135,6 +135,8 @@ lzio.h
 
 - Lua不同数据"类"的实现（v5.4.2）   
 > 因为 Lua 用标准C实现，所以没有用到cpp的class，用struct配合union实现了类的“多态”  
+> 这里的 TValue 就是一个标准的 variant可变体 允许在运行时决定变量的类型  
+> CPP17里也提供了 std::variant 库实现类似的行为  
 ```
 typedef unsigned char lu_byte;
 #define CommonHeader	struct GCObject *next; lu_byte tt; lu_byte marked
@@ -355,7 +357,7 @@ typedef struct Table {
   Node *node; // 指向hash数组起始位
   Node *lastfree;  /* any free position is before this position */ 指向hash数组空闲位
   struct Table *metatable; // 元表
-  GCObject *gclist;
+  GCObject *gclist; // 表内所有元素的GCObject的链表
 } Table;
 ```
 > About 'alimit': if 'isrealasize(t)' is true, then 'alimit' is the real size of 'array'.   
@@ -365,7 +367,109 @@ typedef struct Table {
 > 否则 array 的大小是不小于 alimit 的最小的 2<sup>n</sup>，当且仅当 alimit=0 时，array大小是0  
 > 比如说alimit=7，那大小其实就是8，alimit=25，大小其实就是32，保证数组大小是 pow(2) 是有益的  
 
-短短几行定义，就可以实现那么复杂的功能，不得不说招牌菜就是香，
+- 表的一些访问宏  
+```
+#define gnode(t,i)	(&(t)->node[6])
+#define gval(n)		(&(n)->i_val)
+#define gnext(n)	((n)->u.next)
+```
+
+- Hash Node  
+看看哈希节点的定义吧，一个 union 里包含着 u 和 i_val 两个数据结构  
+因为是union所以二者只出现一个，那么它们各自在什么时候出现呢(TODO)  
+在介绍 table 的构造之前，需要先介绍一下2个辅助数据结构，分别是 dummyNode 和 mainposition 
+- dummyNode  
+```
+#define dummynode		(&dummynode_)
+static const Node dummynode_ = {
+  {{NULL}, LUA_VEMPTY,  /* value's value and type */
+   LUA_VNIL, 0, {NULL}}  /* key type, next, and key value */
+};
+// 为方便理解，上述代码可以转化为
+dummynode_.u.value_ = {NULL};		// Value(union)
+dummynode_.u.tt_ = LUA_VEMPTY;		// lu_byte
+dummynode_.u.key_tt = LUA_VNIL;		// lu_byte
+dummynode_.u.next = 0;			// int
+dummynode_.u.key_val = {NULL};		// Value(union)
+```
+声明一个全局静态常量节点，并且将其各种变量定义为空指针/空值  
+这个空节点其实是用了判断Hash数组是否为空的，也是一种常见的编程方式（头前节点？）  
+
+- mainposition  
+因为LUA表使用开地址法处理哈希冲突，导致一个问题就是：后来的新key经过hash后，发现自己的节点被占用  
+一个 key 经过 hash 后得到的未处理过的值，称为这个 key 的 mainposition首要位置  
+```
+#define twoto(x)	(1<<(x))
+#define sizenode(t)	(twoto((t)->lsizenode))
+// 默认数据类型
+#define hashpow2(t,n)		(gnode(t, lmod((n), sizenode(t))))
+#define hashstr(t,str)		hashpow2(t, (str)->hash)
+#define hashboolean(t,p)	hashpow2(t, p)
+#define hashint(t,i)		hashpow2(t, i)
+// 自定义指针
+#define hashmod(t,n)		(gnode(t, ((n) % ((sizenode(t)-1)|1))))
+#define hashpointer(t,p)	hashmod(t, point2uint(p))
+#define point2uint(p)		((unsigned int)((size_t)(p) & UINT_MAX))
+
+static Node *mainposition (const Table *t, int ktt, const Value *kvl) {
+  switch (withvariant(ktt)) {
+    case LUA_VNUMINT: // int
+      return hashint(t, ivalueraw(*kvl));
+    case LUA_VNUMFLT: // float
+      return hashmod(t, l_hashfloat(fltvalueraw(*kvl)));
+    case LUA_VSHRSTR: // short str
+      return hashstr(t, tsvalueraw(*kvl));
+    case LUA_VLNGSTR:  // long str
+      return hashpow2(t, luaS_hashlongstr(tsvalueraw(*kvl)));
+    case LUA_VFALSE: // bool false
+      return hashboolean(t, 0);
+    case LUA_VTRUE: // bool true
+      return hashboolean(t, 1);
+    case LUA_VLIGHTUSERDATA: // bool lightudata
+      return hashpointer(t, pvalueraw(*kvl));
+    case LUA_VLCF: // bool
+      return hashpointer(t, fvalueraw(*kvl));
+    default:
+      return hashpointer(t, gcvalueraw(*kvl));
+  }
+}
+```
+先不管hash的2参数各种繁杂的宏和函数，他们前面的实现都是清晰简洁的  
+- 对一般数据类型而言  
+因为 hashpow2 的存在，前面 lsizenode 才需要对2取对数  
+因为 sizenode 会将 1 左移 lsizenode 位，获得当前 hash 数组长度  
+然后对处理好的数值进行mod运算后，得出的最终值就是他的主位置  
+- 对自定义指针而言  
+唯一的区别就在 (sizenode(t)-1)|1 这里，对数组长度减1后对末位补1  
+> 这是编程的巧思也是数学的美，GPT告诉我：
+> 在哈希取模的过程中，通常会使用模数的一种特殊形式，即模数为2的幂次方加1（这里是-1）  
+> 比如，3、5、17、257等都是这种形式。而在这种情况下，模数的末尾需要补1  
+> 这是因为，对于模数为2的幂次方加1的形式，可以使用一种更高效的计算方法——使用位运算来代替除法运算  
+> 具体地说，我们可以使用按位与操作（&）来代替取模运算（%），这样可以大大提高计算速度  
+> 但是，为了使用这种方法，我们需要保证模数的二进制表示中，除了最高位以外，其他位都是1  
+> 因此，我们需要在模数的末尾补1，以满足这个条件。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

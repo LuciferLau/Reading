@@ -384,10 +384,12 @@ typedef struct Table {
 	+ next：int  
 指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置  
 	
-	
 看看哈希节点的定义吧，一个 union 里包含着 u 和 i_val 两个数据结构  
-因为是union所以二者只出现一个，那么它们各自在什么时候出现呢(TODO)  
-
+因为是union所以二者只出现一个，那么它们各自在什么时候出现呢？  
+为了优化整数键的值查询效率，i_val 字段用于存储整数键对应的值
+> 需要注意的是，当表中既有整数键又有非整数键时  
+> Lua 会同时维护数组部分和哈希部分，这时整数键对应的值存储在 i_val 数组中  
+> 非整数键对应的值存储在哈希表中的节点的 u.value 字段中  
     
 在介绍 table 的构造之前，需要先介绍一下2个辅助数据结构，分别是 dummyNode 和 mainposition 
 - dummyNode  
@@ -564,7 +566,7 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
         othern += gnext(othern); // 因为是偏移量，对指针进行运算即可
       gnext(othern) = cast_int(f - othern);  /* rechain to point to 'f' */ 找到你的上一个节点了（现在的othern），修改它的偏移量吧
       // 因为你会被移到lastfree所在位置，所以上一个节点(othern)和你(mp)的偏移量就是 f - othern 
-      *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */ mp当前还是指向你这个被赶过来的，lastfree也指向你吧
+      *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */ mp当前还是指向你这个被赶过来的，把你复制到lastfree位置吧
       if (gnext(mp) != 0) { // 如果你后面还有别的节点，那就修正一下他的偏移量吧
         gnext(f) += cast_int(mp - f);  /* correct 'next' */ 你现在来到 lastfree 的位置了，修正你和你下一个节点的偏移量
         gnext(mp) = 0;  /* now 'mp' is free */ mp自由了
@@ -575,15 +577,16 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
       /* new node will go into free position */
       if (gnext(mp) != 0) // 头插我进链表
         gnext(f) = cast_int((mp + gnext(mp)) - f);  /* chain new position */
-      else lua_assert(gnext(f) == 0);
+      else 
+      	lua_assert(gnext(f) == 0);
       gnext(mp) = cast_int(f - mp);
-      mp = f;
+      mp = f; //修改mp指针到lastfree位置
     }
   }
-  setnodekey(L, mp, key);
-  luaC_barrierback(L, obj2gco(t), key);
-  lua_assert(isempty(gval(mp)));
-  return gval(mp);
+  setnodekey(L, mp, key); //更新key对应的TValue到mp所指位置
+  luaC_barrierback(L, obj2gco(t), key); //内存写屏障，防止在GC时对象被错误地释放
+  lua_assert(isempty(gval(mp))); // 断言这个值为 LUA_TNIL 类型，因为新 Node 里面的 i_val 还未初始化
+  return gval(mp); // 返回mp所指节点的 i_val 值，方便后续赋值
 }
 ```
 在 luaH_newkey 中，比较容易令人迷惑的就是 mp != othern 这个不等的比较  
@@ -591,7 +594,24 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
 但可能占用了这个位置的节点，是因为它的主节点也被占用（mp所指节点产生了哈希冲突）  
 不得已才过来的；因此，对mp的 k-v 计算它实际的主节点是很必要的  
 如果发现这不是你地盘，你就该立马让个位出来，顺着 lastfree 找个位置呆着吧  
-详细过程看代码注释，如果还是比较抽象就可以看看他人的图文总结 [参考资料](https://blog.csdn.net/chqj_163/article/details/118050890)
+详细过程看代码注释，如果还是比较抽象就可以看看他人的图文总结 [参考资料](https://blog.csdn.net/chqj_163/article/details/118050890)  
+
+- 空闲节点的获取
+``` c
+static Node *getfreepos (Table *t) {
+  if (!isdummy(t)) { // 非空表
+    while (t->lastfree > t->node) { // 非头结点
+      t->lastfree--; // 前移
+      if (keyisnil(t->lastfree)) // 空节点返回
+        return t->lastfree;
+    }
+  }
+  return NULL;  /* could not find a free place */
+}
+```
+这部分逻辑比较简单，从上面创建表的过程中，我们可以发现 lastfree 的指向并没有改版  
+实际上，他是在 创表luaH_new 或者 扩/缩容luaH_resize 的时候指向了哈希数组的末尾(通过setnodevector)  
+然后在后续使用的时候通过 自减 的方式找空位，找到了此时的指向就是从后往前第一个空节点了  
 
 
 

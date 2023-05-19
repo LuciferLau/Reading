@@ -337,6 +337,15 @@ void luaS_resize (lua_State *L, int nsize) {
 > Lua 的招牌菜——表，使用极其便利，几乎支持任意类型的 k-v 键值对  
 > 但使用不当可能会造成效率低性能差的问题，通过研究源代码，让我们逐步揭开它方便好使的背后逻辑  
 - 表的数据结构（v5.4.2）
+	+ TValuefields  
+描述哈希键对应的值，对应例子中 value_:"hello", tt_:LUA_VSHRSTR  
+	+ key_tt：lu_byte  
+描述哈希键的类型，对应例子中 LUA_VSHRSTR  
+	+ key_val：Value  
+描述哈希键的值，对应例子中 "hi"   
+	+ next：int  
+指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置  
+> 举例说明：假设有 *local t = { ["hi"] = "hello" }*  
 ``` c
 typedef union Node {
   struct NodeKey {
@@ -360,9 +369,32 @@ typedef struct Table {
   GCObject *gclist; // 表内所有元素的GCObject的链表
 } Table;
 ```
-> About 'alimit': if 'isrealasize(t)' is true, then 'alimit' is the real size of 'array'.   
+- alimit是什么  
+> 看看官方注释 About 'alimit': if 'isrealasize(t)' is true, then 'alimit' is the real size of 'array'.   
 > Otherwise, the real size of 'array' is the smallest power of two not smaller than 'alimit' (or zero iff 'alimit'is zero);   
 > 'alimit' is then used as a hint for #t.  
+``` c
+#define limitequalsasize(t)	(isrealasize(t) || ispow2((t)->alimit))
+LUAI_FUNC unsigned int luaH_realasize (const Table *t) {
+  if (limitequalsasize(t))
+    return t->alimit;  /* this is the size */
+  else {
+    unsigned int size = t->alimit;
+    /* compute the smallest power of 2 not smaller than 'n' */
+    size |= (size >> 1);
+    size |= (size >> 2);
+    size |= (size >> 4);
+    size |= (size >> 8);
+    size |= (size >> 16);
+#if (UINT_MAX >> 30) > 3
+    size |= (size >> 32);  /* unsigned int has more than 32 bits */
+#endif
+    size++;
+    lua_assert(ispow2(size) && size/2 < t->alimit && t->alimit < size);
+    return size;
+  }
+}
+```
 > iff：当且仅当。翻译一下，就是当 isrealasize 返回 true 时alimit是array的真实大小  
 > 否则 array 的大小是不小于 alimit 的最小的 2<sup>n</sup>，当且仅当 alimit=0 时，array大小是0  
 > 比如说alimit=7，那大小其实就是8，alimit=25，大小其实就是32，保证数组大小是 pow(2) 是有益的  
@@ -374,23 +406,6 @@ typedef struct Table {
 #define gnext(n)	((n)->u.next)
 ```
 
-- Hash Node 假设有 *local t = { ["hi"] = "hello" }*  
-	+ TValuefields  
-描述哈希键对应的值，对应例子中 value_:"hello", tt_:LUA_VSHRSTR  
-	+ key_tt：lu_byte  
-描述哈希键的类型，对应例子中 LUA_VSHRSTR  
-	+ key_val：Value  
-描述哈希键的值，对应例子中 "hi"   
-	+ next：int  
-指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置  
-	
-看看哈希节点的定义吧，一个 union 里包含着 u 和 i_val 两个数据结构  
-因为是union所以二者只出现一个，那么它们各自在什么时候出现呢？  
-为了优化整数键的值查询效率，i_val 字段用于存储整数键对应的值
-> 需要注意的是，当表中既有整数键又有非整数键时  
-> Lua 会同时维护数组部分和哈希部分，这时整数键对应的值存储在 i_val 数组中  
-> 非整数键对应的值存储在哈希表中的节点的 u.value 字段中  
-    
 在介绍 table 的构造之前，需要先介绍一下2个辅助数据结构，分别是 dummyNode 和 mainposition 
 - dummyNode  
 ``` c
@@ -612,9 +627,103 @@ static Node *getfreepos (Table *t) {
 这部分逻辑比较简单，从上面创建表的过程中，我们可以发现 lastfree 的指向并没有改版  
 实际上，他是在 创表luaH_new 或者 扩/缩容luaH_resize 的时候指向了哈希数组的末尾(通过setnodevector)  
 然后在后续使用的时候通过 自减 的方式找空位，找到了此时的指向就是从后往前第一个空节点了  
+- Node.i_val 和 table.array
+这二者的赋值，都在 luaH_setint 的时候  
+``` c
+const TValue *luaH_getint (Table *t, lua_Integer key) {
+  if (l_castS2U(key) - 1u < t->alimit)  /* 'key' in [1, t->alimit]? */
+    return &t->array[key - 1]; // 整形值在数组范围内，返回数组对应位置引用
+  else if (!limitequalsasize(t) &&  /* key still may be in the array part? */
+           (l_castS2U(key) == t->alimit + 1 ||
+            l_castS2U(key) - 1u < luaH_realasize(t))) {
+// 另一种情况，因为alimit并非实际数组大小，这里会可能修正alimit == realsize
+// 假设alimit=5，此时size=8，如果key为8，第一个判断会false
+// 因此将 key == alimit+1 和 key-1 < realsize 的情况考虑进来
+// 那么按照刚刚的例子 (8 == 5+1) false || (8-1 < 8) true 
+    t->alimit = cast_uint(key);  /* probably '#t' is here now */ alimit修正为8 刚好 limitequalsasize
+    return &t->array[key - 1]; 
+  }
+  else {
+    Node *n = hashint(t, key);
+    for (;;) {  /* check whether 'key' is somewhere in the chain */
+      if (keyisinteger(n) && keyival(n) == key)
+        return gval(n);  /* that's it */
+      else {
+        int nx = gnext(n);
+        if (nx == 0) break;
+        n += nx;
+      }
+    }
+    return &absentkey;
+  }
+}
 
+void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
+  const TValue *p = luaH_getint(t, key); // 找不到时返回 absentKey，否则返回 array的位置 或者 hashtable里的i_val
+  TValue *cell;
+  if (!isabstkey(p)) // 数组和哈希表任意一个里面找到了
+    cell = cast(TValue *, p); // 解const，准备修改节点的 TValuefields
+  else { // 找不到这个 int 的节点
+    TValue k; // 构造一个TV准备用于插入新节点
+    setivalue(&k, key);
+    cell = luaH_newkey(L, t, &k); // 记录返回的 i_val，此时cell指向对应Node的 i_val
+  }
+  setobj2t(L, cell, value); // cell->value_ = value->value_; cell->tt_ = value->tt_; 修改了i_val的内容
+}
+```
+通过设置数组和哈希表，均摊了部分整数到数组中，降低了哈希冲突实际上也提高了效率  
+数组大小范围内的整数key都会保存到array，范围外的就进入哈希表  
+那么当他们大小改变了，会发生什么呢？接下来看看 hash resize 的做法  
 
+- 表的扩容缩容
+``` c
+void luaH_resize (lua_State *L, Table *t, unsigned int newasize, unsigned int nhsize) {
+  unsigned int i; // 用于数组遍历，记录数组大小
+  Table newt;  /* to keep the new hash part */ 新的表
+  unsigned int oldasize = setlimittosize(t); // 将alimit设为实际大小，并更改flags位使元方法 isrealasize 返回为真 
+  TValue *newarray; // 新的array数组
+  /* create new hash part with appropriate size into 'newt' */
+  setnodevector(L, &newt, nhsize); // luaH_new 的最后一步，初始化表的字段，设置哈希表大小，区别是这里没有加入全局的gc管理
+  
+  // 缩容时
+  if (newasize < oldasize) {  /* will array shrink? */
+    t->alimit = newasize;  /* pretend array has new size... */ 假装旧array已经是新的长度了（变小）
+    exchangehashpart(t, &newt);  /* and new hash */ 将 t 和 newt 的 lsizenode node lastfree 交换（方便失败时还原）
+    /* re-insert into the new hash the elements from vanishing slice */
+    // 对于缩容的部分，因为alimit已经改了，所以这里调用 luaH_setint 会把超长的部分转移到哈希表里
+    for (i = newasize; i < oldasize; i++) {
+      if (!isempty(&t->array[i])) 
+        luaH_setint(L, t, i + 1, &t->array[i]);
+    }
+    t->alimit = oldasize;  /* restore current size... */ 把alimit还原回去
+    exchangehashpart(t, &newt);  /* and hash (in case of errors) */ 再把哈希部分的字段交换回来
+  }
+  
+  /* allocate new array */
+  newarray = luaM_reallocvector(L, t->array, oldasize, newasize, TValue);
+  if (unlikely(newarray == NULL && newasize > 0)) {  /* allocation failed? */
+    freehash(L, &newt);  /* release new hash part */
+    luaM_error(L);  /* raise error (with array unchanged) */
+  }
+  /* allocation ok; initialize new part of the array */
+  exchangehashpart(t, &newt);  /* 't' has the new hash ('newt' has the old) */
+  t->array = newarray;  /* set new array part */
+  t->alimit = newasize;
+  for (i = oldasize; i < newasize; i++)  /* clear new slice of the array */
+     setempty(&t->array[i]);
+  /* re-insert elements from old hash part into new parts */
+  reinsert(L, &newt, t);  /* 'newt' now has the old hash */
+  freehash(L, &newt);  /* free old hash part */
+}
 
+void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize) {
+  int nsize = allocsizenode(t);
+  luaH_resize(L, t, nasize, nsize);
+}
+```
+我们观察表对数组部分缩容的操作，是十分高效的  
+因为他没有任何的内存拷贝，只是单纯把指针swap了一下  
+就把 t 的 array 超长部分转移到了 newt 的 node 里面
 
 
 

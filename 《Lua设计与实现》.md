@@ -374,14 +374,15 @@ typedef struct Table {
 #define gnext(n)	((n)->u.next)
 ```
 
-- Hash Node  
+- Hash Node 假设有 *local t = { ["hi"] = "hello" }*  
 	+ TValuefields  
-	
+描述哈希键对应的值，对应例子中 value_:"hello", tt_:LUA_VSHRSTR  
 	+ key_tt：lu_byte  
-	
+描述哈希键的类型，对应例子中 LUA_VSHRSTR  
 	+ key_val：Value  
+描述哈希键的值，对应例子中 "hi"   
 	+ next：int  
-	指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置 
+指向相同hash值的下一个节点，这里用int表示 offset偏移量 因为是数组结构，对指针进行加减就可以找到对应位置  
 	
 	
 看看哈希节点的定义吧，一个 union 里包含着 u 和 i_val 两个数据结构  
@@ -559,19 +560,20 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
     othern = mainposition(t, keytt(mp), &keyval(mp)); // 获取主位置节点k-v的主位置
     if (othern != mp) {  /* is colliding node out of its main position? */ 你是本来就该在这的，还是被赶过来的
       /* yes; move colliding node into free position */ 如果是被赶过来的，我才是应该在这的，你让个位置吧
-      while (othern + gnext(othern) != mp)  /* find previous */
-        othern += gnext(othern);
-      gnext(othern) = cast_int(f - othern);  /* rechain to point to 'f' */
-      *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */
-      if (gnext(mp) != 0) {
-        gnext(f) += cast_int(mp - f);  /* correct 'next' */
-        gnext(mp) = 0;  /* now 'mp' is free */
+      while (othern + gnext(othern) != mp)  /* find previous */ 从你应该在的主位置节点一直往下找，找到你的上一个节点（链表）
+        othern += gnext(othern); // 因为是偏移量，对指针进行运算即可
+      gnext(othern) = cast_int(f - othern);  /* rechain to point to 'f' */ 找到你的上一个节点了（现在的othern），修改它的偏移量吧
+      // 因为你会被移到lastfree所在位置，所以上一个节点(othern)和你(mp)的偏移量就是 f - othern 
+      *f = *mp;  /* copy colliding node into free pos. (mp->next also goes) */ mp当前还是指向你这个被赶过来的，lastfree也指向你吧
+      if (gnext(mp) != 0) { // 如果你后面还有别的节点，那就修正一下他的偏移量吧
+        gnext(f) += cast_int(mp - f);  /* correct 'next' */ 你现在来到 lastfree 的位置了，修正你和你下一个节点的偏移量
+        gnext(mp) = 0;  /* now 'mp' is free */ mp自由了
       }
-      setempty(gval(mp));
+      setempty(gval(mp)); // 清空mp节点 i_val 的 tt_ 为 LUA_VEMPTY
     }
-    else {  /* colliding node is in its own main position */
+    else {  /* colliding node is in its own main position */ 你本来就在这的，我主位置和你冲突了，我自己走
       /* new node will go into free position */
-      if (gnext(mp) != 0)
+      if (gnext(mp) != 0) // 头插我进链表
         gnext(f) = cast_int((mp + gnext(mp)) - f);  /* chain new position */
       else lua_assert(gnext(f) == 0);
       gnext(mp) = cast_int(f - mp);
@@ -589,6 +591,7 @@ TValue *luaH_newkey (lua_State *L, Table *t, const TValue *key) {
 但可能占用了这个位置的节点，是因为它的主节点也被占用（mp所指节点产生了哈希冲突）  
 不得已才过来的；因此，对mp的 k-v 计算它实际的主节点是很必要的  
 如果发现这不是你地盘，你就该立马让个位出来，顺着 lastfree 找个位置呆着吧  
+详细过程看代码注释，如果还是比较抽象就可以看看他人的图文总结 [参考资料](https://blog.csdn.net/chqj_163/article/details/118050890)
 
 
 

@@ -996,18 +996,16 @@ int luaH_next (lua_State *L, Table *t, StkId key) {
 ```
 
 - 表的长度获取
-前面介绍了 numusearray/numusehash 都是获取已使用元素个数  
-Lua也提供了获取长度的操作，我们通过 #tbl 获取 tbl 的长度，但限制对序列使用  
-而他的具体实现则是 luaH_getn，因为限制了序列，所以基本是对 alimit 进行操作  
+	- 如果 t[limit] 是空，边界很可能在前面
+		+ 如果 limit-1 有值，那他就是边界（特例）
+		+ 否则，从 [0,limit] 调用 binsearch 二分搜索边界
+	- 如果 t[limit] 非空，数组后面可能还有很多值
+		+ 如果 limit+1 无值，那 limit 就是边界（特例）
+		+ 否则，从 [limit,realsize] 调用 binsearch 二分搜索边界
+	- 如果 limit 为0，且非空表，表示数值元素被存放在哈希表而非数组（前面算optimal的例子）
+		+ 调用 hash_search 搜索边界（也是二分思想）  
+
 核心思想：通过二分搜素，找到“边界”，即找到最后一个有值的下标 和 第一个无值的下标  
-- 如果 t[limit] 是空，边界很可能在前面
-	+ 如果 limit-1 有值，那他就是边界（特例）
-	+ 否则，从 [0,limit] 调用 binsearch 二分搜索边界
-- 如果 t[limit] 非空，数组后面可能还有很多值
-	+ 如果 limit+1 无值，那 limit 就是边界（特例）
-	+ 否则，从 [limit,realsize] 调用 binsearch 二分搜索边界
-- 如果 limit 为0，且非空表，表示数值元素被存放在哈希表而非数组（前面算optimal的例子）
-	+ 调用 hash_search 搜索边界（也是二分思想）  
 > 这块算法反而是比较复杂的部分，算法考虑很多特例情况来加快运行  
 > 代价是可读性特别差，所以注释特别多，我就不瞎翻译了（其实是懒）  
 ``` c

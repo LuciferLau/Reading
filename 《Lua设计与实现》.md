@@ -538,8 +538,10 @@ Table *luaH_new (lua_State *L) {
   return t;
 }
 ```
-无论是什么类型，在Lua中都是需要先生成 GCObject 然后再强转为对应类型，Table也不例外  
+无论是什么自定义类型，在Lua中都是需要先生成 GCObject 然后再强转为对应类型，Table也不例外  
 新表创建出来，啥也没有十分干净，非0即NULL，于是我们看看如何为它增添一些成员  
+> 除了 int float 和 自定义指针，他们的回收比较不一样  
+
 - 表 k-v 的插入
 ``` c
 TValue *luaH_set (lua_State *L, Table *t, const TValue *key) {
@@ -713,6 +715,8 @@ static const TValue *getgeneric (Table *t, const TValue *key, int deadok) {
 
 - Node.i_val 和 table.array
 这二者的赋值，都可以在 luaH_setint 的时候找到例子，但前者更为广泛  
+仔细看 Node 其实是个 union，而 i_val 又是 TValue 类型变量，因为内存共用  
+修改 i_val 的值实际上就是修改 Node.u 中的 TValuefield，这也是数据结构上设计的巧思  
 ``` c
 void luaH_setint (lua_State *L, Table *t, lua_Integer key, TValue *value) {
   const TValue *p = luaH_getint(t, key); // 找不到时返回 absentKey，否则返回 array的位置 或者 hashtable里的i_val
@@ -759,7 +763,7 @@ void luaH_resize (lua_State *L, Table *t, unsigned int newasize, unsigned int nh
   newarray = luaM_reallocvector(L, t->array, oldasize, newasize, TValue); 
   if (unlikely(newarray == NULL && newasize > 0)) {  /* allocation failed? */
     freehash(L, &newt);  /* release new hash part */ 释放新表
-    luaM_error(L);  /* raise error (with array unchanged) */ 抛出 ERROR，可能在这里就abort了
+    luaM_error(L);  /* raise error (with array unchanged) */ 抛出 ERROR，可能在这里就abort了（no handle时）
   }
   
   // 新array数组分配完成，要对其赋值了（刚刚只操作了哈希表没操作array）
@@ -769,7 +773,7 @@ void luaH_resize (lua_State *L, Table *t, unsigned int newasize, unsigned int nh
   for (i = oldasize; i < newasize; i++)  /* clear new slice of the array */ 缩容其实啥也不做
      setempty(&t->array[i]);	// 扩容时将多出来的部分初始化为 LUA_VEMPTY
   /* re-insert elements from old hash part into new parts */
-  reinsert(L, &newt, t);  /* 'newt' now has the old hash */
+  reinsert(L, &newt, t);  /* 'newt' now has the old hash */ 将旧哈希表中的Node设进新哈希表
   freehash(L, &newt);  /* free old hash part */
 }
 
@@ -778,11 +782,11 @@ static void reinsert (lua_State *L, Table *ot, Table *t) {
   int size = sizenode(ot);
   for (j = 0; j < size; j++) {
     Node *old = gnode(ot, j);
-    if (!isempty(gval(old))) { // i_val非LUA_VEMPTY
+    if (!isempty(gval(old))) { // i_val非LUA_VEMPTY（初始化节点）
       /* doesn't need barrier/invalidate cache, as entry was already present in the table */
       TValue k;
       getnodekey(L, &k, old); // k->value_ = old->u.key_val k->tt_ = old->u.key_tt
-      setobjt2t(L, luaH_set(L, t, &k), gval(old)); // 在t中获取节点，将i_val赋值过去
+      setobjt2t(L, luaH_set(L, t, &k), gval(old)); // 在t中根据k(old Key)重新获取节点位置，将i_val赋值过去
     }
   }
 }
@@ -796,6 +800,112 @@ void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize) {
 因为他没有任何的内存拷贝，只是单纯把指针swap了一下  
 就把 t 的 array 超长部分转移到了 newt 的 node 里面
 
+- 表的扩容缩容条件 与 表size计算  
+	+ 哈希表扩容  
+		- luaH_newkey 获取 lastfree 发现已经指向 NULL 时  
+	+ 哈希表缩容  
+		- 哈希表内有大量int类型key被转移进array里  
+	+ 数组扩容
+		- 哈希表内有大量int类型key被转移进array里
+	+ 数组缩容
+		- 暂未发现主动缩容情况
+```
+#define MAXABITS	cast_int(sizeof(int) * CHAR_BIT - 1) // CHAR_BIT是每个字节的位数，通常1字节8位，但某些os可能不一样，具体见limit.h
+#define MAXASIZE	luaM_limitN(1u << MAXABITS, TValue)
+
+// 统计数组部分中的数值
+static unsigned int numusearray (const Table *t, unsigned int *nums) {
+  int lg; // 2的lg次幂用位表示，对应MAXABITS第几位，以0开始，对应nums[0]
+  unsigned int ttlg;  /* 2^lg */ 2的lg次幂用值表示，每次乘2，以2的0次幂，即1开始
+  unsigned int ause = 0;  /* summation of 'nums' */ 数组总元素个数
+  unsigned int i = 1;  /* count to traverse all array keys */
+  unsigned int asize = limitasasize(t);  /* real array size */ 当前的t->alimit
+  /* traverse each slice */ MAXBITS有做-1操作，所以这里遍历是 <= MAXBITS
+  
+  /* 
+  第一轮 遍历 t->array[0 ~ 0] 中非 LUA_VEMPTY，记录到 nums[0];
+  第二轮 遍历 t->array[1 ~ 1] 中非 LUA_VEMPTY，记录到 nums[1];
+  第三轮 遍历 t->array[2 ~ 4] 中非 LUA_VEMPTY，记录到 nums[2];
+  第四轮 遍历 t->array[5 ~ 8] 中非 LUA_VEMPTY，记录到 nums[3];
+  第五轮 遍历 t->array[9 ~ 16] 中非 LUA_VEMPTY，记录到 nums[4];
+  第六轮 遍历 t->array[17 ~ 32] 中非 LUA_VEMPTY，记录到 nums[5];
+  第七轮 遍历 t->array[33 ~ 64] 中非 LUA_VEMPTY，记录到 nums[6];
+  ...
+  */
+  for (lg = 0, ttlg = 1; lg <= MAXABITS; lg++, ttlg *= 2) {
+    unsigned int lc = 0;  /* counter */
+    unsigned int lim = ttlg;
+    if (lim > asize) { // 2^lg 大于 t->alimit 说明此时已经是最后一轮，可以回看alimit的定义结合理解
+      lim = asize;  /* adjust upper limit */ 减少遍历次数，(lim,asize]的值此时都是初始值，无意义
+      if (i > lim) // 发现游标已经过了遍历上限了，直接跳出循环
+        break;  /* no more elements to count */
+    }
+    /* count elements in range (2^(lg - 1), 2^lg] */
+    for (; i <= lim; i++) {
+      if (!isempty(&t->array[i-1]))
+        lc++;
+    }
+    nums[lg] += lc;
+    ause += lc;
+  }
+  return ause;
+}
+
+// 哈希表部分
+static unsigned int arrayindex (lua_Integer k) {
+  if (l_castS2U(k) - 1u < MAXASIZE)  /* 'k' in [1, MAXASIZE]? */
+    return cast_uint(k);  /* 'key' is an appropriate array index */
+  else
+    return 0;
+}
+
+static int countint (lua_Integer key, unsigned int *nums) {
+  unsigned int k = arrayindex(key); // key数值在array范围内
+  if (k != 0) {  /* is 'key' an appropriate array index? */
+    nums[luaO_ceillog2(k)]++;  /* count as such */ 对cast_uint后的key对2求对数，向上取整
+    return 1; // 返回1，表示成功
+  }
+  else
+    return 0;
+}
+
+static int numusehash (const Table *t, unsigned int *nums, unsigned int *pna) {
+  int totaluse = 0;  /* total number of elements */ 哈希表元素总值
+  int ause = 0;  /* elements added to 'nums' (can go to array part) */ 哈希表中可以放到t->array的元素个数
+  int i = sizenode(t); // t->lsizenode
+  while (i--) {
+    Node *n = &t->node[i];
+    if (!isempty(gval(n))) {
+      if (keyisinteger(n))
+        ause += countint(keyival(n), nums); //countint根据key值大小是否在[1, MAXASIZE]，判断这个值能否放nums数组，能就放进去且计数+1
+      totaluse++;
+    }
+  }
+  *pna += ause; // 更新外层的na值
+  return totaluse;
+}
+
+static void rehash (lua_State *L, Table *t, const TValue *ek) {
+  unsigned int asize;  /* optimal size for array part */
+  unsigned int na;  /* number of keys in the array part */
+  unsigned int nums[MAXABITS + 1];
+  int i;
+  int totaluse;
+  for (i = 0; i <= MAXABITS; i++) nums[i] = 0;  /* reset counts */ 假设sizeof(int)为4，1字节8位，那么这个值是31(32-1)
+  setlimittosize(t); // 更新alimit值为数组实际大小
+  na = numusearray(t, nums);  /* count keys in array part */ 数组非空元素总和
+  totaluse = na;  /* all those keys are integer keys */
+  totaluse += numusehash(t, nums, &na);  /* count keys in hash part */ 表元素总和
+  /* count extra key */ ek为触发此次rehash操作的元素，还未在表内，单独计算
+  if (ttisinteger(ek))
+    na += countint(ivalue(ek), nums);
+  totaluse++;
+  /* compute new size for array part */
+  asize = computesizes(nums, &na); // 算出新的alimit，然后更新na
+  /* resize the table to new computed sizes */
+  luaH_resize(L, t, asize, totaluse - na); // newhashsize = totaluse - na
+}
+```
 
 
 

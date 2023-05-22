@@ -1056,10 +1056,48 @@ lua_Unsigned luaH_getn (Table *t) {
     return hash_search(t, limit);
 }
 ```
+# Chap 5. Lua虚拟机
+> 脚本语言的虚拟机扮演了一个中间层的角色，作为底层操作系统的上层抽象  
+> 对上而言，它负责解释执行字节码；对下而言，它屏蔽了平台相关的内容，使得脚本代码跨平台运行  
 
+- 虚拟机（线程）的数据结构
+``` c
+struct lua_State {
+  CommonHeader;
+  lu_byte status;	// 线程状态
+  lu_byte allowhook;	// 是否允许挂hook
+  unsigned short nci;  /* number of items in 'ci' list */ CallInfo的数量
+  StkId top;  /* first free slot in the stack */  栈顶
+  global_State *l_G; 	// 全局虚拟机指针
+  CallInfo *ci;  /* call info for current function */ 当前函数调用信息
+  StkId stack_last;  /* end of stack (last element + 1) */ 栈底的
+  StkId stack;  /* stack base */ Lua虚拟栈
+  UpVal *openupval;  /* list of open upvalues in this stack */
+  GCObject *gclist;
+  struct lua_State *twups;  /* list of threads with open upvalues */
+  struct lua_longjmp *errorJmp;  /* current error recover point */
+  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */
+  volatile lua_Hook hook;
+  ptrdiff_t errfunc;  /* current error handling function (stack index) */
+  l_uint32 nCcalls;  /* number of nested (non-yieldable | C)  calls */
+  int oldpc;  /* last pc traced */
+  int basehookcount;
+  int hookcount;
+  volatile l_signalT hookmask;
+};
+```
 
+# Chap 6. 指令的解析与执行[略]
 
+# Chap 7. GC算法
 
+# Chap 8. 环境与模块
+
+# Chap 9. 调试器工作原理
+
+# Chap 10. 异常处理
+
+# Chap 11. 协程
 
 
 

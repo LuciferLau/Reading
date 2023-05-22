@@ -945,8 +945,55 @@ static void rehash (lua_State *L, Table *t, const TValue *ek) {
   luaH_resize(L, t, asize, totaluse - na); // newhashsize = totaluse - na
 }
 ```
+- 表的遍历（迭代）  
+区别于传统迭代器的模式，因为表这个容器实际上由 数组 和 哈希表 两部分组成  
+所以它的迭代是用 Key 来实现的，通过循环调用 luaH_next 实现对表的遍历  
+```
+#define s2v(o)	(&(o)->val)
+typedef union StackValue {
+  TValue val;
+} StackValue;
+typedef StackValue *StkId;
 
+static unsigned int findindex (lua_State *L, Table *t, TValue *key, unsigned int asize) {
+  unsigned int i;
+  if (ttisnil(key)) return 0;  /* first iteration */
+  i = ttisinteger(key) ? arrayindex(ivalue(key)) : 0;
+  if (i - 1u < asize)  /* is 'key' inside array part? */
+    return i;  /* yes; that's the index */ 
+  else {
+    const TValue *n = getgeneric(t, key, 1); // 获取key在哈希表内对应的值
+    if (unlikely(isabstkey(n)))
+      luaG_runerror(L, "invalid key to 'next'");  /* key not found */
+    i = cast_int(nodefromval(n) - gnode(t, 0));  /* key index in hash table */ 获取这个值对应Node 和 t->node[0] 的差值，就是这个节点的下标
+    /* hash elements are numbered after array ones */
+    return (i + 1) + asize; // 加1就是下一个节点的下标，即next
+  }
+}
 
+int luaH_next (lua_State *L, Table *t, StkId key) {
+  unsigned int asize = luaH_realasize(t); // 获取数组部分长度
+  unsigned int i = findindex(L, t, s2v(key), asize);  /* find original key */
+  // 如果 i 在数组部分
+  for (; i < asize; i++) {  /* try first array part */
+    if (!isempty(&t->array[i])) {  /* a non-empty entry? */
+      setivalue(s2v(key), i + 1); // 更新栈内key的value_=i+1 和 tt_=LUA_VNUMINT
+      setobj2s(L, key + 1, &t->array[i]); // 值压栈到 key+1 的位置 
+      return 1;
+    }
+  }
+  // 如果 i 不在数组部分，i肯定是大于 asize 的（见findIndex else返回）故上一个for不执行
+  for (i -= asize; cast_int(i) < sizenode(t); i++) {  /* hash part */ 开始就得先把 asize 减掉获取正确哈希表下标
+    if (!isempty(gval(gnode(t, i)))) {  /* a non-empty entry? */
+      Node *n = gnode(t, i);
+      getnodekey(L, s2v(key), n); // 更新栈内key的value_和tt_为Node n对应值
+      setobj2s(L, key + 1, gval(n)); // 值压栈到 key+1 的位置 
+      return 1;
+    }
+  }
+  return 0;  /* no more elements */
+}
+```
 
 
 

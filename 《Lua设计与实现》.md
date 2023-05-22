@@ -809,7 +809,7 @@ void luaH_resizearray (lua_State *L, Table *t, unsigned int nasize) {
 		- 哈希表内有大量int类型key被转移进array里
 	+ 数组缩容
 		- 暂未发现主动缩容情况
-```
+``` c
 #define MAXABITS	cast_int(sizeof(int) * CHAR_BIT - 1) // CHAR_BIT是每个字节的位数，通常1字节8位，但某些os可能不一样，具体见limit.h
 #define MAXASIZE	luaM_limitN(1u << MAXABITS, TValue)
 
@@ -823,13 +823,13 @@ static unsigned int numusearray (const Table *t, unsigned int *nums) {
   /* traverse each slice */ MAXBITS有做-1操作，所以这里遍历是 <= MAXBITS
   
   /* 
-  第一轮 遍历 t->array[0 ~ 0] 中非 LUA_VEMPTY，记录到 nums[0];
-  第二轮 遍历 t->array[1 ~ 1] 中非 LUA_VEMPTY，记录到 nums[1];
-  第三轮 遍历 t->array[2 ~ 4] 中非 LUA_VEMPTY，记录到 nums[2];
-  第四轮 遍历 t->array[5 ~ 8] 中非 LUA_VEMPTY，记录到 nums[3];
-  第五轮 遍历 t->array[9 ~ 16] 中非 LUA_VEMPTY，记录到 nums[4];
-  第六轮 遍历 t->array[17 ~ 32] 中非 LUA_VEMPTY，记录到 nums[5];
-  第七轮 遍历 t->array[33 ~ 64] 中非 LUA_VEMPTY，记录到 nums[6];
+  第一轮 遍历 t->array[0 ~ 0] 中非 LUA_VEMPTY，记录到 nums[0]，最多1个;
+  第二轮 遍历 t->array[1 ~ 1] 中非 LUA_VEMPTY，记录到 nums[1]，最多1个;
+  第三轮 遍历 t->array[2 ~ 4] 中非 LUA_VEMPTY，记录到 nums[2]，最多3个;
+  第四轮 遍历 t->array[5 ~ 8] 中非 LUA_VEMPTY，记录到 nums[3]，最多4个;
+  第五轮 遍历 t->array[9 ~ 16] 中非 LUA_VEMPTY，记录到 nums[4]，最多8个;
+  第六轮 遍历 t->array[17 ~ 32] 中非 LUA_VEMPTY，记录到 nums[5]，最多16个;
+  第七轮 遍历 t->array[33 ~ 64] 中非 LUA_VEMPTY，记录到 nums[6]，最多32个;
   ...
   */
   for (lg = 0, ttlg = 1; lg <= MAXABITS; lg++, ttlg *= 2) {
@@ -877,12 +877,51 @@ static int numusehash (const Table *t, unsigned int *nums, unsigned int *pna) {
     Node *n = &t->node[i];
     if (!isempty(gval(n))) {
       if (keyisinteger(n))
-        ause += countint(keyival(n), nums); //countint根据key值大小是否在[1, MAXASIZE]，判断这个值能否放nums数组，能就放进去且计数+1
+        ause += countint(keyival(n), nums); //根据key值大小是否在[1, MAXASIZE]，判断这个值能否放nums数组，能就放进去且计数+1
       totaluse++;
     }
   }
   *pna += ause; // 更新外层的na值
   return totaluse;
+}
+
+static unsigned int computesizes (unsigned int nums[], unsigned int *pna) {
+  int i; // 对应nums[i]，数组下标，默认0
+  unsigned int twotoi;  /* 2^i (candidate for optimal size) */ 2的i次幂，每次乘2指数自增，默认1
+  unsigned int a = 0;  /* number of elements smaller than 2^i */ 
+  unsigned int na = 0;  /* number of elements to go to array part */
+  unsigned int optimal = 0;  /* optimal size for array part */
+  /* loop while keys can fill more than half of total size */
+  for (i = 0, twotoi = 1;
+       twotoi > 0 && *pna > twotoi / 2; // 数组总元素个数大于当前 2^(i-1) 但小于 2^i，回看alimit定义
+       i++, twotoi *= 2) {
+    a += nums[i];
+    if (a > twotoi/2) {  /* more than half elements present? */
+      optimal = twotoi;  /* optimal size (till now) */ 最理想的大小
+      na = a;  /* all elements up to 'optimal' will go to array part */
+    }
+  }
+  /* na = 8
+  假设有 nums[7] = { 0, 0, 0, 0, 4, 4, 0, 0 }
+  对应的 twotoi 为： 1  2  4  8  16 32 64 128
+  对应的 twotoi/2为：0  1  2  4  8  16 32 64
+  对应的 a 为：      0  0  0  0  4  8  8  8
+  当 i=4 时，因为 a(4) <= twotoi/2(8)，optimal值未能更新，后续也不可能更新
+  此时alimit的值就会被改为0，后续在 luaH_setint 的时候，数值都会被放到哈希表直至下次rehash
+  这样子的设计，应该是考虑到了 array 数组的空间分配出来得充分利用（至少得用到一半），否则干脆不用array
+  毕竟，在定义 local t = { [100000] = 1 } 的时候，声明一个巨大的 array 是十分浪费的行为
+  
+  而如果将例子稍微修改 na = 13
+  nums[7] = { 0, 0, 1, 4, 4, 4, 0, 0 }
+  twotoi/2为：0  1  2  4  8  16 32 64
+  a 为：      0  0  1  5  9  13 13 13
+  当 i=4 时，因为 a(9) > twotoi/2(8)，optimal = 16，na = 9（少了的部分[13-9]就去哈希表吧）
+  当 i=5 时，因为 a(13) > twotoi/2(16)，后续也不可能更新
+  于是 alimit 可以修改为 4，数组的过半元素都可以被赋非空值
+  */
+  lua_assert((optimal == 0 || optimal / 2 < na) && na <= optimal);
+  *pna = na;
+  return optimal;
 }
 
 static void rehash (lua_State *L, Table *t, const TValue *ek) {

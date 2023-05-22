@@ -948,7 +948,7 @@ static void rehash (lua_State *L, Table *t, const TValue *ek) {
 - 表的遍历（迭代）  
 区别于传统迭代器的模式，因为表这个容器实际上由 数组 和 哈希表 两部分组成  
 所以它的迭代是用 Key 来实现的，通过循环调用 luaH_next 实现对表的遍历  
-```
+``` c
 #define s2v(o)	(&(o)->val)
 typedef union StackValue {
   TValue val;
@@ -995,8 +995,69 @@ int luaH_next (lua_State *L, Table *t, StkId key) {
 }
 ```
 
-
-
+- 表的长度获取
+前面介绍了 numusearray/numusehash 都是获取已使用元素个数  
+Lua也提供了获取长度的操作，我们通过 #tbl 获取 tbl 的长度，但限制对序列使用  
+而他的具体实现则是 luaH_getn，因为限制了序列，所以基本是对 alimit 进行操作  
+核心思想：通过二分搜素，找到“边界”，即找到最后一个有值的下标 和 第一个无值的下标  
+- 如果 t[limit] 是空，边界很可能在前面
+	+ 如果 limit-1 有值，那他就是边界（特例）
+	+ 否则，从 [0,limit] 调用 binsearch 二分搜索边界
+- 如果 t[limit] 非空，数组后面可能还有很多值
+	+ 如果 limit+1 无值，那 limit 就是边界（特例）
+	+ 否则，从 [limit,realsize] 调用 binsearch 二分搜索边界
+- 如果 limit 为0，且非空表，表示数值元素被存放在哈希表而非数组（前面算optimal的例子）
+	+ 调用 hash_search 搜索边界（也是二分思想）  
+> 这块算法反而是比较复杂的部分，算法考虑很多特例情况来加快运行  
+> 代价是可读性特别差，所以注释特别多，我就不瞎翻译了（其实是懒）  
+``` c
+lua_Unsigned luaH_getn (Table *t) {
+  unsigned int limit = t->alimit;
+  if (limit > 0 && isempty(&t->array[limit - 1])) {  /* (1)? */
+    /* there must be a boundary before 'limit' */
+    if (limit >= 2 && !isempty(&t->array[limit - 2])) {
+      /* 'limit - 1' is a boundary; can it be a new limit? */
+      if (ispow2realasize(t) && !ispow2(limit - 1)) {
+        t->alimit = limit - 1;
+        setnorealasize(t);  /* now 'alimit' is not the real size */
+      }
+      return limit - 1;
+    }
+    else {  /* must search for a boundary in [0, limit] */
+      unsigned int boundary = binsearch(t->array, 0, limit);
+      /* can this boundary represent the real size of the array? */
+      if (ispow2realasize(t) && boundary > luaH_realasize(t) / 2) {
+        t->alimit = boundary;  /* use it as the new limit */
+        setnorealasize(t);
+      }
+      return boundary;
+    }
+  }
+  /* 'limit' is zero or present in table */
+  if (!limitequalsasize(t)) {  /* (2)? */
+    /* 'limit' > 0 and array has more elements after 'limit' */
+    if (isempty(&t->array[limit]))  /* 'limit + 1' is empty? */
+      return limit;  /* this is the boundary */
+    /* else, try last element in the array */
+    limit = luaH_realasize(t);
+    if (isempty(&t->array[limit - 1])) {  /* empty? */
+      /* there must be a boundary in the array after old limit,
+         and it must be a valid new limit */
+      unsigned int boundary = binsearch(t->array, t->alimit, limit);
+      t->alimit = boundary;
+      return boundary;
+    }
+    /* else, new limit is present in the table; check the hash part */
+  }
+  /* (3) 'limit' is the last element and either is zero or present in table */
+  lua_assert(limit == luaH_realasize(t) &&
+             (limit == 0 || !isempty(&t->array[limit - 1])));
+  if (isdummy(t) || isempty(luaH_getint(t, cast(lua_Integer, limit + 1))))
+    return limit;  /* 'limit + 1' is absent */
+  else  /* 'limit + 1' is also present */
+    return hash_search(t, limit);
+}
+```
 
 
 

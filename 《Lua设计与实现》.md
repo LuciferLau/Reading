@@ -1060,8 +1060,10 @@ lua_Unsigned luaH_getn (Table *t) {
 > 脚本语言的虚拟机扮演了一个中间层的角色，作为底层操作系统的上层抽象  
 > 对上而言，它负责解释执行字节码；对下而言，它屏蔽了平台相关的内容，使得脚本代码跨平台运行  
 
-- 虚拟机（线程）的数据结构
+- 虚拟机的数据结构  
+一个Lua虚拟机中
 ``` c
+// LUA线程
 struct lua_State {
   CommonHeader;
   lu_byte status;	// 线程状态
@@ -1070,13 +1072,13 @@ struct lua_State {
   StkId top;  /* first free slot in the stack */  栈顶
   global_State *l_G; 	// 全局虚拟机指针
   CallInfo *ci;  /* call info for current function */ 当前函数调用信息
-  StkId stack_last;  /* end of stack (last element + 1) */ 栈底的
+  StkId stack_last;  /* end of stack (last element + 1) */ 栈底的下一个元素，表示不可用的位置
   StkId stack;  /* stack base */ Lua虚拟栈
-  UpVal *openupval;  /* list of open upvalues in this stack */
-  GCObject *gclist;
-  struct lua_State *twups;  /* list of threads with open upvalues */
-  struct lua_longjmp *errorJmp;  /* current error recover point */
-  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */
+  UpVal *openupval;  /* list of open upvalues in this stack */ 开放的上值列表
+  GCObject *gclist; // 垃圾回收列表
+  struct lua_State *twups;  /* list of threads with open upvalues */ 带上值的线程列表
+  struct lua_longjmp *errorJmp;  /* current error recover point */ 保护模式下，遇到异常跳出逻辑
+  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */ 
   volatile lua_Hook hook;
   ptrdiff_t errfunc;  /* current error handling function (stack index) */
   l_uint32 nCcalls;  /* number of nested (non-yieldable | C)  calls */
@@ -1085,6 +1087,74 @@ struct lua_State {
   int hookcount;
   volatile l_signalT hookmask;
 };
+
+// 这里把 global_state 内的GC相关提取出来方便阅读
+typedef struct GCInfo {
+  l_mem totalbytes;  /* number of bytes currently allocated - GCdebt */ 分配内存的总字节数
+  l_mem GCdebt;  /* bytes allocated not yet compensated by the collector */ GC器欠的债，还未归还的字节数
+  lu_mem GCestimate;  /* an estimate of the non-garbage memory in use */ 非垃圾内存的预估字节数
+  lu_mem lastatomic;  /* see function 'genstep' in file 'lgc.c' */ 
+  lu_byte currentwhite;
+  lu_byte gcstate;  /* state of garbage collector */
+  lu_byte gckind;  /* kind of GC running */
+  lu_byte genminormul;  /* control for minor generational collections */
+  lu_byte genmajormul;  /* control for major generational collections */
+  lu_byte gcrunning;  /* true if GC is running */
+  lu_byte gcemergency;  /* true if this is an emergency collection */
+  lu_byte gcpause;  /* size of pause between successive GCs */
+  lu_byte gcstepmul;  /* GC "speed" */
+  lu_byte gcstepsize;  /* (log2 of) GC granularity */
+  GCObject *allgc;  /* list of all collectable objects */
+  GCObject **sweepgc;  /* current position of sweep in list */
+  GCObject *finobj;  /* list of collectable objects with finalizers */
+  GCObject *gray;  /* list of gray objects */
+  GCObject *grayagain;  /* list of objects to be traversed atomically */
+  GCObject *weak;  /* list of tables with weak values */
+  GCObject *ephemeron;  /* list of ephemeron tables (weak keys) */
+  GCObject *allweak;  /* list of all-weak tables */
+  GCObject *tobefnz;  /* list of userdata to be GC */
+  GCObject *fixedgc;  /* list of objects not to be collected */
+  /* fields for generational collector */
+  GCObject *survival;  /* start of objects that survived one GC cycle */
+  GCObject *old1;  /* start of old1 objects */
+  GCObject *reallyold;  /* objects more than one cycle old ("really old") */
+  GCObject *firstold1;  /* first OLD1 object in the list (if any) */
+  GCObject *finobjsur;  /* list of survival objects with finalizers */
+  GCObject *finobjold1;  /* list of old1 objects with finalizers */
+  GCObject *finobjrold;  /* list of really old objects with finalizers */
+} GCInfo;
+
+// 全局线程
+typedef struct global_State {
+  // allcator
+  lua_Alloc frealloc;  /* function to reallocate memory */ 内存分配函数，默认使用realloc
+  void *ud;         /* auxiliary data to 'frealloc' */ 内存分配函数的辅助数据，user design表示可由用户自定义，默认不使用
+  TString *memerrmsg;  /* message for memory-allocation errors */ 内存分配的错误信息
+
+  TValue l_registry; // 全局的注册表
+  TValue nilvalue;  /* a nil value */ 空值？
+  unsigned int seed;  /* randomized seed for hashes */ 哈希种子，在创建的时候就确定了
+  
+  // GC
+  GCInfo gcinfo; // 垃圾回收相关
+  
+  struct lua_State *twups;  /* list of threads with open upvalues */
+  struct lua_State *mainthread; // 主线程
+  
+  // metatable
+  TString *tmname[TM_N];  /* array with tag-method names */ 
+  struct Table *mt[LUA_NUMTAGS];  /* metatables for basic types */
+  
+  // string
+  TString *strcache[STRCACHE_N][STRCACHE_M];  /* cache for strings in API */ 长字符串的缓存，N默认53，M默认2，在llimit.h
+  stringtable strt;  /* hash table for strings */ 短字符串的缓存
+  
+  // 
+  lua_CFunction panic;  /* to be called in unprotected errors */ 非保护调用，抛出异常时用panic处理
+  lua_WarnFunction warnf;  /* warning function */ warning级别处理函数
+  void *ud_warn;         /* auxiliary data to 'warnf' */ 用户自定义 warnf 用数据
+} global_State;
+
 ```
 
 # Chap 6. 指令的解析与执行[略]

@@ -114,6 +114,7 @@ lzio.h
 > 本章的数据结构基本都在 lobject.h 定义，读者可以根据自己本地的 Lua 版本阅读源码  
 - Lua基本数据类型（v5.4.2）  
 ``` c
+//基本类型
 #define LUA_TNONE		(-1)        // 无
 #define LUA_TNIL		0           // nil值
 #define LUA_TBOOLEAN		1       // 布尔值
@@ -124,7 +125,8 @@ lzio.h
 #define LUA_TFUNCTION		6       // C闭包 L(ua)闭包
 #define LUA_TUSERDATA		7       // void*
 #define LUA_TTHREAD		8         // lua_State
-#define LUA_NUMTYPES		9       // 用于下面的定义
+
+#define LUA_NUMTYPES		9       // 类型数量(0~8) number of types，用于下面的定义
 // Extra types for collectable non-values 用于可回收的“无值”类型
 #define LUA_TUPVAL	LUA_NUMTYPES  /* upvalues */ 上值
 #define LUA_TPROTO	(LUA_NUMTYPES+1)  /* function prototypes */ 函数原型
@@ -1130,16 +1132,15 @@ typedef struct global_State {
   lua_Alloc frealloc;  /* function to reallocate memory */ 内存分配函数，默认使用realloc
   void *ud;         /* auxiliary data to 'frealloc' */ 内存分配函数的辅助数据，user design表示可由用户自定义，默认不使用
   TString *memerrmsg;  /* message for memory-allocation errors */ 内存分配的错误信息
-
-  TValue l_registry; // 全局的注册表
-  TValue nilvalue;  /* a nil value */ 空值？
-  unsigned int seed;  /* randomized seed for hashes */ 哈希种子，在创建的时候就确定了
   
   // GC
   GCInfo gcinfo; // 垃圾回收相关
   
   struct lua_State *twups;  /* list of threads with open upvalues */
   struct lua_State *mainthread; // 主线程
+  TValue l_registry; // 全局的注册表
+  TValue nilvalue;  /* a nil value */ 空值？
+  unsigned int seed;  /* randomized seed for hashes */ 哈希种子，在创建的时候就确定了
   
   // metatable
   TString *tmname[TM_N];  /* array with tag-method names */ 
@@ -1149,12 +1150,11 @@ typedef struct global_State {
   TString *strcache[STRCACHE_N][STRCACHE_M];  /* cache for strings in API */ 长字符串的缓存，N默认53，M默认2，在llimit.h
   stringtable strt;  /* hash table for strings */ 短字符串的缓存
   
-  // 
+  // err handle
   lua_CFunction panic;  /* to be called in unprotected errors */ 非保护调用，抛出异常时用panic处理
   lua_WarnFunction warnf;  /* warning function */ warning级别处理函数
   void *ud_warn;         /* auxiliary data to 'warnf' */ 用户自定义 warnf 用数据
 } global_State;
-
 ```
 
 # Chap 6. 指令的解析与执行[略]

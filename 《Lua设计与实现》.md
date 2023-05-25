@@ -1063,31 +1063,39 @@ lua_Unsigned luaH_getn (Table *t) {
 > 对上而言，它负责解释执行字节码；对下而言，它屏蔽了平台相关的内容，使得脚本代码跨平台运行  
 
 - 虚拟机的数据结构  
-一个Lua虚拟机中
+一个Lua虚拟机中 state 是最初的数据结构，它管理了Lua所有元素的CRUD  
 ``` c
-// LUA线程
+// LUA"线程"
 struct lua_State {
-  CommonHeader;
+  CommonHeader;		// 由此可见，state本身也是一个对象，由GC管理
   lu_byte status;	// 线程状态
-  lu_byte allowhook;	// 是否允许挂hook
-  unsigned short nci;  /* number of items in 'ci' list */ CallInfo的数量
-  StkId top;  /* first free slot in the stack */  栈顶
   global_State *l_G; 	// 全局虚拟机指针
-  CallInfo *ci;  /* call info for current function */ 当前函数调用信息
-  StkId stack_last;  /* end of stack (last element + 1) */ 栈底的下一个元素，表示不可用的位置
+  GCObject *gclist;	// 垃圾回收列表
+  
+  // stack
   StkId stack;  /* stack base */ Lua虚拟栈
+  StkId top;  /* first free slot in the stack */  栈顶
+  StkId stack_last;  /* end of stack (last element + 1) */ 栈底的下一个元素，表示不可用的位置
+  
+  // calls
+  unsigned short nci;  /* number of items in 'ci' list */ CallInfo的数量
+  CallInfo *ci;  /* call info for current function */ 当前函数调用信息
+  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */ C调用Lua的第一级信息
+  l_uint32 nCcalls;  /* number of nested (non-yieldable | C)  calls */ 嵌套（无法让出|C）调用的数量
   UpVal *openupval;  /* list of open upvalues in this stack */ 开放的上值列表
-  GCObject *gclist; // 垃圾回收列表
   struct lua_State *twups;  /* list of threads with open upvalues */ 带上值的线程列表
+  
+  // err handle
   struct lua_longjmp *errorJmp;  /* current error recover point */ 保护模式下，遇到异常跳出逻辑
-  CallInfo base_ci;  /* CallInfo for first level (C calling Lua) */ 
-  volatile lua_Hook hook;
-  ptrdiff_t errfunc;  /* current error handling function (stack index) */
-  l_uint32 nCcalls;  /* number of nested (non-yieldable | C)  calls */
-  int oldpc;  /* last pc traced */
-  int basehookcount;
-  int hookcount;
-  volatile l_signalT hookmask;
+  ptrdiff_t errfunc;  /* current error handling function (stack index) */ 错误处理函数在栈的位置
+  int oldpc;  /* last pc traced */	// 上次PC（程序计数器）的位置
+  
+  // hook
+  lu_byte allowhook;			// 是否允许挂hook
+  volatile lua_Hook hook;		// hook函数
+  int basehookcount;			// hook基础计数
+  int hookcount;			// hook当前计数
+  volatile l_signalT hookmask;		// hook掩码
 };
 
 // 这里把 global_state 内的GC相关提取出来方便阅读
@@ -1126,11 +1134,11 @@ typedef struct GCInfo {
   GCObject *finobjrold;  /* list of really old objects with finalizers */
 } GCInfo;
 
-// 全局线程
+// LUA线程的全局环境
 typedef struct global_State {
   // allcator
   lua_Alloc frealloc;  /* function to reallocate memory */ 内存分配函数，默认使用realloc
-  void *ud;         /* auxiliary data to 'frealloc' */ 内存分配函数的辅助数据，user design表示可由用户自定义，默认不使用
+  void *ud;         /* auxiliary data to 'frealloc' */ 内存分配函数的辅助数据，ud(userdata)表示可由用户自定义数据，默认不使用
   TString *memerrmsg;  /* message for memory-allocation errors */ 内存分配的错误信息
   
   // GC
@@ -1139,7 +1147,7 @@ typedef struct global_State {
   struct lua_State *twups;  /* list of threads with open upvalues */
   struct lua_State *mainthread; // 主线程
   TValue l_registry; // 全局的注册表
-  TValue nilvalue;  /* a nil value */ 空值？
+  TValue nilvalue;  /* a nil value */ 空值？见 lua_newstate，状态控制用
   unsigned int seed;  /* randomized seed for hashes */ 哈希种子，在创建的时候就确定了
   
   // metatable
@@ -1156,7 +1164,82 @@ typedef struct global_State {
   void *ud_warn;         /* auxiliary data to 'warnf' */ 用户自定义 warnf 用数据
 } global_State;
 ```
+光看数据结构，总还是会觉得云里雾里，无法理解为什么要这样设计，设计的用处是什么，痛点在哪里  
+于是，便很自然的，会想去看看state的创建流程：  
+```
+typedef struct LX {
+  lu_byte extra_[LUA_EXTRASPACE];
+  lua_State l;
+} LX;
 
+typedef struct LG {
+  LX l;
+  global_State g;
+} LG;
+
+LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
+  int i;	   // 元方法迭代器
+  lua_State *L;	   // Lua线程 L
+  global_State *g; // 全局状态 g
+  LG *l = cast(LG *, (*f)(ud, NULL, LUA_TTHREAD, sizeof(LG))); // 默认使用realloc，创建一个LG对象，用l指向他，类型是LUA_TTHREAD
+  if (l == NULL) return NULL; // 内存分配失败返回空
+  L = &l->l.l; 			// L赋值LG.l
+  L->tt = LUA_VTHREAD;		// 类型赋值
+  L->next = NULL;		// 下一个GC成员
+  L->nCcalls = 0;		// 嵌套 C 调用数
+  L->marked = luaC_white(g); 	// 标记为白色，表示不可回收 
+  incnny(L);  /* main thread is always non yieldable */ 设置主线程不可让出
+  
+  g = &l->g;				// g赋值LG.g
+  g->currentwhite = bitmask(WHITE0BIT); // 标记为白色（分WHITE0/1），表示不可回收 
+  preinit_thread(L, g);			// 为线程赋常量值，且不分配任何内存
+  g->allgc = obj2gco(L);  /* by now, only object is the main thread */ 目前Lua线程（主线程L）是allgc链里唯一成员
+  g->frealloc = f;			// 默认使用realloc，自定义内存分配函数
+  g->ud = ud;				// 内存分配函数的自定义用户数据
+  g->warnf = NULL; 			// 默认为空，自定义warn函数	
+  g->ud_warn = NULL; 			// 自定义warn函数的用户数据
+  g->mainthread = L;			// 设置主线程为 L
+  g->seed = luai_makeseed(L); 		// hash随机种子 
+  g->gcrunning = 0;  /* no GC while building state */ 设置GC运行状态为关闭，创建state时不要GC
+  g->strt.size = g->strt.nuse = 0; 	// 短字符串大小 和 当前使用大小 初始化为0
+  g->strt.hash = NULL; 			// hash种子 初始化为空
+  setnilvalue(&g->l_registry);		// 全局注册表设空
+  g->panic = NULL; 			// 默认为空，atpanic调用函数
+  g->gcstate = GCSpause; 		// 默认为GCSpause，GC状态
+  g->gckind = KGC_INC; 			// GC 有 KGC_GEN 和 KGC_INC 2种模式，默认为增量inc，gen又分major和minor
+  g->gcemergency = 0;			// 紧急GC，在申请内存时执行
+  g->finobj = g->tobefnz = g->fixedgc = NULL; 			// GC中，即将GC，不GC
+  g->firstold1 = g->survival = g->old1 = g->reallyold = NULL; 	// 第一个OLD1，存活了1个GC周期的对象链，OLD1，大于1个GC周期的对象链（分代GC）
+  g->finobjsur = g->finobjold1 = g->finobjrold = NULL;		// 有finalizer（回收处理tm:__gc）的survival，OLD1，reallyold
+  g->sweepgc = NULL; 			// sweep GC回收内存，sweep还分为GCSswpallgc、GCSswpfinobj、GCSswptobefnz、GCSswpend
+  g->gray = g->grayagain = NULL;	// 灰色的数据和atomic后复灰的数据list
+  g->weak = g->ephemeron = g->allweak = NULL;
+  g->twups = NULL;			// 带上值的Lua线程数初始化空
+  g->totalbytes = sizeof(LG); 		// 虚拟机总内存
+  g->GCdebt = 0; 			// 当前负债
+  g->lastatomic = 0; 			// 上次原子操作是否正常执行
+  setivalue(&g->nilvalue, 0);  /* to signal that state is not yet built */ nilvalue==0，表示这个state未创建成功
+  setgcparam(g->gcpause, LUAI_GCPAUSE); // 两个连续GC的间暂停的值
+  setgcparam(g->gcstepmul, LUAI_GCMUL); // GC的速度
+  g->gcstepsize = LUAI_GCSTEPSIZE; 	// GC颗粒度
+  /*
+  #define setgcparam(p,v)	((p) = (v) / 4)
+  #define getgcparam(p)		((p) * 4)
+  这里用对 lu_byte(unsigned char) 类型变量使用 setgcparam 是因为它最大表示255(1111 1111)
+  先 /4 在 *4 可以让 lu_byte 突破天际，最大存储 1023（11 1111 1111），属实是trick拉满
+  PS：这里有个疑问，是否应该是 1020（11 1111 1100）？末尾右移再左移不会丢失吗？
+  */
+  setgcparam(g->genmajormul, LUAI_GENMAJORMUL);  // 默认100，major GC控制
+  g->genminormul = LUAI_GENMINORMUL; 	// 默认20，minor GC控制
+  for (i=0; i < LUA_NUMTAGS; i++) g->mt[i] = NULL; 		// 元表初始化为空
+  if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) { 	// 尝试运行线程，失败了就关闭线程
+    /* memory allocation error: free partial state */
+    close_state(L);
+    L = NULL;
+  }
+  return L;
+}
+```
 # Chap 6. 指令的解析与执行[略]
 
 # Chap 7. GC算法

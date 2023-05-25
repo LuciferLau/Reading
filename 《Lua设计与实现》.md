@@ -1166,7 +1166,7 @@ typedef struct global_State {
 ```
 光看数据结构，总还是会觉得云里雾里，无法理解为什么要这样设计，设计的用处是什么，痛点在哪里  
 于是，便很自然的，会想去看看state的创建流程：  
-```
+``` c
 typedef struct LX {
   lu_byte extra_[LUA_EXTRASPACE];
   lua_State l;
@@ -1183,7 +1183,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   global_State *g; // 全局状态 g
   LG *l = cast(LG *, (*f)(ud, NULL, LUA_TTHREAD, sizeof(LG))); // 默认使用realloc，创建一个LG对象，用l指向他，类型是LUA_TTHREAD
   if (l == NULL) return NULL; // 内存分配失败返回空
-  L = &l->l.l; 			// L赋值LG.l
+  L = &l->l.l; 			// L赋值LG.l.l
   L->tt = LUA_VTHREAD;		// 类型赋值
   L->next = NULL;		// 下一个GC成员
   L->nCcalls = 0;		// 嵌套 C 调用数
@@ -1213,7 +1213,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->finobjsur = g->finobjold1 = g->finobjrold = NULL;		// 有finalizer（回收处理tm:__gc）的survival，OLD1，reallyold
   g->sweepgc = NULL; 			// sweep GC回收内存，sweep还分为GCSswpallgc、GCSswpfinobj、GCSswptobefnz、GCSswpend
   g->gray = g->grayagain = NULL;	// 灰色的数据和atomic后复灰的数据list
-  g->weak = g->ephemeron = g->allweak = NULL;
+  g->weak = g->ephemeron = g->allweak = NULL; // 弱值引用，弱表引用，所有弱引用
   g->twups = NULL;			// 带上值的Lua线程数初始化空
   g->totalbytes = sizeof(LG); 		// 虚拟机总内存
   g->GCdebt = 0; 			// 当前负债
@@ -1222,24 +1222,26 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   setgcparam(g->gcpause, LUAI_GCPAUSE); // 两个连续GC的间暂停的值
   setgcparam(g->gcstepmul, LUAI_GCMUL); // GC的速度
   g->gcstepsize = LUAI_GCSTEPSIZE; 	// GC颗粒度
-  /*
-  #define setgcparam(p,v)	((p) = (v) / 4)
-  #define getgcparam(p)		((p) * 4)
-  这里用对 lu_byte(unsigned char) 类型变量使用 setgcparam 是因为它最大表示255(1111 1111)
-  先 /4 在 *4 可以让 lu_byte 突破天际，最大存储 1023（11 1111 1111），属实是trick拉满
-  PS：这里有个疑问，是否应该是 1020（11 1111 1100）？末尾右移再左移不会丢失吗？
-  */
   setgcparam(g->genmajormul, LUAI_GENMAJORMUL);  // 默认100，major GC控制
   g->genminormul = LUAI_GENMINORMUL; 	// 默认20，minor GC控制
   for (i=0; i < LUA_NUMTAGS; i++) g->mt[i] = NULL; 		// 元表初始化为空
   if (luaD_rawrunprotected(L, f_luaopen, NULL) != LUA_OK) { 	// 尝试运行线程，失败了就关闭线程
     /* memory allocation error: free partial state */
-    close_state(L);
+    close_state(L);			// 内存分配失败，state关闭
     L = NULL;
   }
   return L;
 }
+/*
+#define setgcparam(p,v)	((p) = (v) / 4)
+#define getgcparam(p)		((p) * 4)
+这里用对 lu_byte(unsigned char) 类型变量使用 setgcparam 是因为它最大表示255(1111 1111)
+先 /4 在 *4 可以让 lu_byte 突破天际，最大存储 1023（11 1111 1111），属实是trick拉满
+PS：这里有个疑问，是否应该是 1020（11 1111 1100）？末尾右移再左移不会丢失吗？
+*/
 ```
+观察Lua线程的创建，
+
 # Chap 6. 指令的解析与执行[略]
 
 # Chap 7. GC算法

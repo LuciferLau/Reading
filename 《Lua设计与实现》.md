@@ -1248,13 +1248,13 @@ static void f_luaopen (lua_State *L, void *ud) {
   global_State *g = G(L);
   UNUSED(ud);			// UNUSED宏规避编译器警告未使用变量
   stack_init(L, L);  /* init stack */ Lua栈创建，这里可见有2个L参数，实际上是mainthread创subthread的时候用的，见lua_newthread
-  init_registry(L, g);		// 
-  luaS_init(L);			//
-  luaT_init(L);			//	
-  luaX_init(L);			//
+  init_registry(L, g);		// 全局注册表初始化
+  luaS_init(L);			// string相关初始化
+  luaT_init(L);			// 元表相关初始化
+  luaX_init(L);			// 词法分析初始化
   g->gcrunning = 1;  /* allow gc */ 开启GC
   setnilvalue(&g->nilvalue); 	// nilvalue值设空，表示state初始化完成
-  luai_userstateopen(L);	// 
+  luai_userstateopen(L);	// 启用state后用户可以自定义的实现，默认不做事
 }
 ```
 在介绍其中函数内实际上都做了什么前，需要先对其使用到的数据结构做一下简单介绍  
@@ -1263,17 +1263,22 @@ typedef union StackValue {
   TValue val;
 } StackValue;
 typedef StackValue *StkId;
+typedef l_uint32 Instruction; // 无符号int(32)/long(64)
+
+#define l_signalT	sig_atomic_t // 普遍是int，根据signal.h决定
 
 typedef struct CallInfo {
-  StkId func;  /* function index in the stack */
-  StkId	top;  /* top for this function */
-  struct CallInfo *previous, *next;  /* dynamic call link */
+  StkId func;  /* function index in the stack */ 函数在栈中的位置
+  StkId	top;  /* top for this function */ 函数的栈顶
+  struct CallInfo *previous, *next;  /* dynamic call link */ 调用链的前后ci
   union {
+    // Lua 函数 l
     struct {  /* only for Lua functions */
-      const Instruction *savedpc;
-      volatile l_signalT trap;
-      int nextraargs;  /* # of extra arguments in vararg functions */
+      const Instruction *savedpc;	// 记录函数运行到哪步
+      volatile l_signalT trap;		// trap设置陷阱，debug时配合hook使用，后续在学习 luaV_execute 时探索
+      int nextraargs;  /* # of extra arguments in vararg functions */ 变长参数函数的参数个数
     } l;
+    // C 函数 c
     struct {  /* only for C functions */
       lua_KFunction k;  /* continuation in case of yields */
       ptrdiff_t old_errfunc;

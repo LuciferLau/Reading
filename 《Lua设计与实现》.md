@@ -1240,7 +1240,84 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
 PS：这里有个疑问，是否应该是 1020（11 1111 1100）？末尾右移再左移不会丢失吗？
 */
 ```
-观察Lua线程的创建，
+观察Lua线程的创建，可以看到它基本是是对各种变量初始化赋值，并未真正执行什么内容  
+唯一涉及到内存的也就是创建了个 LG 结构，初始化各种默认值是为了后续使用准备  
+可能也是为了内存分配失败时回收的简易，最终调用了 f_luaopen 函数，那么看看它做了啥  
+``` c
+static void f_luaopen (lua_State *L, void *ud) {
+  global_State *g = G(L);
+  UNUSED(ud);			// UNUSED宏规避编译器警告未使用变量
+  stack_init(L, L);  /* init stack */ Lua栈创建，这里可见有2个L参数，实际上是mainthread创subthread的时候用的，见lua_newthread
+  init_registry(L, g);		// 
+  luaS_init(L);			//
+  luaT_init(L);			//	
+  luaX_init(L);			//
+  g->gcrunning = 1;  /* allow gc */ 开启GC
+  setnilvalue(&g->nilvalue); 	// nilvalue值设空，表示state初始化完成
+  luai_userstateopen(L);	// 
+}
+```
+在介绍其中函数内实际上都做了什么前，需要先对其使用到的数据结构做一下简单介绍  
+``` c
+typedef union StackValue {
+  TValue val;
+} StackValue;
+typedef StackValue *StkId;
+
+typedef struct CallInfo {
+  StkId func;  /* function index in the stack */
+  StkId	top;  /* top for this function */
+  struct CallInfo *previous, *next;  /* dynamic call link */
+  union {
+    struct {  /* only for Lua functions */
+      const Instruction *savedpc;
+      volatile l_signalT trap;
+      int nextraargs;  /* # of extra arguments in vararg functions */
+    } l;
+    struct {  /* only for C functions */
+      lua_KFunction k;  /* continuation in case of yields */
+      ptrdiff_t old_errfunc;
+      lua_KContext ctx;  /* context info. in case of yields */
+    } c;
+  } u;
+  union {
+    int funcidx;  /* called-function index */
+    int nyield;  /* number of values yielded */
+    struct {  /* info about transferred values (for call/return hooks) */
+      unsigned short ftransfer;  /* offset of first value transferred */
+      unsigned short ntransfer;  /* number of values transferred */
+    } transferinfo;
+  } u2;
+  short nresults;  /* expected number of results from this function */
+  unsigned short callstatus;
+} CallInfo;
+```
+在大致了解了数据结构的构成后，现在可以接着往下看具体函数的实现了  
+``` c
+#define LUA_MINSTACK	20 // 基础值
+#define BASIC_STACK_SIZE        (2*LUA_MINSTACK) // 普通函数使用
+#define EXTRA_STACK   5 // 元方法使用
+static void stack_init (lua_State *L1, lua_State *L) {
+  int i; CallInfo *ci;
+  /* initialize stack array */
+  L1->stack = luaM_newvector(L, BASIC_STACK_SIZE + EXTRA_STACK, StackValue); // 申请 45(2*20+5)*16(sizeof(StackValue)) 大小的内存，且记录到g->GCdept
+  for (i = 0; i < BASIC_STACK_SIZE + EXTRA_STACK; i++)
+    setnilvalue(s2v(L1->stack + i));  /* erase new stack */ 类似bzero，这里是设为LUA_VNIL
+  L1->top = L1->stack;
+  L1->stack_last = L1->stack + BASIC_STACK_SIZE;
+  /* initialize first ci */
+  ci = &L1->base_ci;
+  ci->next = ci->previous = NULL;
+  ci->callstatus = CIST_C;
+  ci->func = L1->top;
+  ci->u.c.k = NULL;
+  ci->nresults = 0;
+  setnilvalue(s2v(L1->top));  /* 'function' entry for this 'ci' */
+  L1->top++;
+  ci->top = L1->top + LUA_MINSTACK;
+  L1->ci = ci;
+}
+```
 
 # Chap 6. 指令的解析与执行[略]
 

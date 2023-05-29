@@ -1259,13 +1259,12 @@ static void f_luaopen (lua_State *L, void *ud) {
 ```
 在介绍其中函数内实际上都做了什么前，需要先对其使用到的数据结构做一下简单介绍  
 ``` c
+#define l_signalT	sig_atomic_t // 普遍是int，根据signal.h决定
 typedef union StackValue {
   TValue val;
 } StackValue;
 typedef StackValue *StkId;
 typedef l_uint32 Instruction; // 无符号int(32)/long(64)
-
-#define l_signalT	sig_atomic_t // 普遍是int，根据signal.h决定
 
 typedef struct CallInfo {
   StkId func;  /* function index in the stack */ 函数在栈中的位置
@@ -1279,24 +1278,26 @@ typedef struct CallInfo {
       int nextraargs;  /* # of extra arguments in vararg functions */ 变长参数函数的参数个数
     } l;
     // C 函数 c
-    struct {  /* only for C functions */
-      lua_KFunction k;  /* continuation in case of yields */
-      ptrdiff_t old_errfunc;
-      lua_KContext ctx;  /* context info. in case of yields */
+    struct {  /* only for C functions */// typedef int (*lua_KFunction) (lua_State *L, int status, lua_KContext ctx);
+      lua_KFunction k;  /* continuation in case of yields */  函数指针，让出时保证程序能够resume
+      ptrdiff_t old_errfunc; 		// 指针(ptr)之间的差值(diff)，定义在"stddef.h"，通常为long
+      lua_KContext ctx;  /* context info. in case of yields */ 函数上下文
     } c;
   } u;
   union {
-    int funcidx;  /* called-function index */
-    int nyield;  /* number of values yielded */
+    int funcidx;  /* called-function index */ 当前函数在栈中索引
+    int nyield;  /* number of values yielded */ 让出值的数量
     struct {  /* info about transferred values (for call/return hooks) */
-      unsigned short ftransfer;  /* offset of first value transferred */
-      unsigned short ntransfer;  /* number of values transferred */
+      unsigned short ftransfer;  /* offset of first value transferred */ 首个转移值的偏移量
+      unsigned short ntransfer;  /* number of values transferred */ 转移值的数量
     } transferinfo;
   } u2;
-  short nresults;  /* expected number of results from this function */
-  unsigned short callstatus;
+  short nresults;  /* expected number of results from this function */ 期望的返回值个数
+  unsigned short callstatus; // 函数调用状态(CIST:CI(CALLINFO),ST(STATUS))
 } CallInfo;
 ```
+观察 CallInfo 结构，说它为整个语言的核心也不为过，其中包含的  
+trap思想，continuation设计，ctx的保留；这些种种都可深入探讨大量paper  
 在大致了解了数据结构的构成后，现在可以接着往下看具体函数的实现了  
 ``` c
 #define LUA_MINSTACK	20 // 基础值

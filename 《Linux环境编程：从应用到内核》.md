@@ -61,10 +61,16 @@ ps：进程的状态监控指令。
 
 这些状态都会随内核版本不同而发生变化，不必过分纠结。
 
+<img width="805" height="598" alt="image" src="https://github.com/user-attachments/assets/86c99074-96aa-4e60-9bd9-3cef8e2dd825" />
+
 在实际生产环境中，我们常见的状态有 R（不必多说），S（I/O多路复用），T（strace/gbd调试）；
 
 比较少见是 Z（代码有误没正确回收子进程），几乎没见过的是 X 和 D。
 <img width="762" height="577" alt="image" src="https://github.com/user-attachments/assets/12900f83-0996-4f3b-bea8-b92bd39da230" />
+
+书中提及了 CPU密集 和 I/O密集 2种不同风格的程序，前者可发挥CPU多核心优势，后者反之（同步）。
+
+pidstat：查看进程用户态和系统态的执行时长占比，user+sys/real 越大，说明越是CPU密集型。
 
 
 # 第6章 信号

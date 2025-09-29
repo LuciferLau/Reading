@@ -130,6 +130,16 @@ CPU亲和力：ps命令中PSR说明进程在某个CPU上运行，如果要绑定
 ---
 
 # 第6章 信号
+> 一个古早的通信机制，1-31为不可靠信号，[SIGRTMIN,SIGRTMAX]为可靠信号。
+<img width="635" height="206" alt="image" src="https://github.com/user-attachments/assets/2b8e4842-95f2-49cf-bc54-ec8ebec164ca" />
+
+
+
+
+
+
+---
+
 # 第7章 理解Linux线程（1）
 # 第8章 理解Linux线程（2）
 # 第9章 进程间通信：管道

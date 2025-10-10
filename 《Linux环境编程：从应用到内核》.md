@@ -131,16 +131,67 @@ CPU亲和力：ps命令中PSR说明进程在某个CPU上运行，如果要绑定
 
 # 第6章 信号
 > 一个古早的通信机制，1-31为不可靠信号，[SIGRTMIN,SIGRTMAX]为可靠信号。
+
+之所以说不可靠，是因为内核对于前31个的信号处理方式决定的：
+
+对于信号的 mgr 来说，有一个位图 sigset 和一个等待(pending)列表 list；
+
+在进程阻塞(sleep)时收到不可靠信号会先检查 set 里面有没有，没有则设1并且塞入list，但如果有了，就不处理直接丢弃；
+
+但可靠信号则会每次都塞入list，直到上限（ulimit pending signals）
+
 <img width="635" height="206" alt="image" src="https://github.com/user-attachments/assets/2b8e4842-95f2-49cf-bc54-ec8ebec164ca" />
 
+## 信号的安装
+func | 新旧 | desc
+| :-: | :-: | -
+singal | old | 功能比较单一，无法设置标志位，触发一次后重置handler
+sigaction | new | 可以设置各种 SA_* 标志，屏蔽除当前信号外多个信号
 
+## 信号的发送
+func | desc
+| :-: | -
+kill | 给指定 pid 发送不同的 signal，0用于判断进程存活，衍生出 tkill/tgkill，指定线程发送，后者根据 tgid 发送防止 tid 复用发错
+raise | 类似 kill，省略 pid（当前进程）
+sigqueue | 也类似 kill，加入第3参数 sigval 可以传输1个int/指针给目标进程（自定义handler时使用）
 
+## 信号的等待
+> SIGKILL/SIGSTOP 无法等待，若尝试等待，操作将被忽略
 
+func | desc
+| :-: | -
+pause | 进程进入可中断的睡眠状态，等待收到1个信号，因为不是原子的，可能导致signal丢失从而永远不被触发
+siguspend | 等待指定信号，并将解除信号阻塞和pause封装成一个原子操作
+sigwait | 降低 siguspend 的使用成本，优雅地等待指定信号，进阶还有 sigwaitinfo/sigtimedwait，捕获额外信息和超时功能
+signalfd | 类似 sigwaitinfo，但可以通过 epoll 等方式监视就绪后 read 到来的信号，较为灵活
 
+POSIX标准规定一个进程下的所有线程共用主进程(线程)的 sigHandler，在 fork 线程的时候会进行 ref++ 的操作，共用一块内存地址；
+
+并且规定 kill/sigqueue 的信号都发送给所有线程，保证在如收到 SIGKILL 这种信号时所有线程都正常退出(exit_group)；
+
+对于多个未决信号在 pending list 内，优先级为：不可靠 > 可靠，可靠内的为：编号小 > 编号大，不可靠内从高到低的为：同步信号->非实时信号->编号 
 
 ---
 
 # 第7章 理解Linux线程（1）
+> 线程又被称为轻量级进程(Light Weighted Process)，每一个用户态线程都有一个内核调度实体和自己的进程描述符(Task Struct)
+> 而 Task Struct 内的 pid 其实是线程ID，tgid 才是进程ID（线程组ID），同一线程组内线程无层级关系
+
+## POSIX标准线程API
+func | desc
+| :-: | -
+pthread_create |	创建一个新的线程。需要提供线程函数（线程将执行的代码）、线程属性以及传递给线程函数的参数
+pthread_join |	阻塞当前线程，直到指定的线程执行结束。可以获取被等待线程的返回值
+pthread_exit |	终止调用该函数的线程，并可以返回一个值给等待它的线程（通过 pthread_join 获取）
+pthread_detach |	将一个线程设置为分离状态。分离后，线程在终止时会自动释放其资源，无需其他线程对其调用 pthread_join()
+pthread_self |	获取当前线程的线程 ID
+pthread_equal |	比较两个线程 ID 是否相等
+
+prctl：进程/线程属性设置，但它是Linux特有的，类似fcntl，ioctl，但fcntl是POSIX标准，ioctl也是非标准的
+
+线程栈默认大小：ulimit -s / ulimit stack size
+
+
 # 第8章 理解Linux线程（2）
 # 第9章 进程间通信：管道
 # 第10章 进程间通信：System V IPC

@@ -1,4 +1,4 @@
-<img width="722" height="128" alt="image" src="https://github.com/user-attachments/assets/7acc029c-c789-4f5e-a3bb-49c93c162f17" />> 工作中经常用的都是脚本语言，久而久之，对较为底层的一些基础知识会慢慢淡化，遂通过此书做补全与复习。
+> 工作中经常用的都是脚本语言，久而久之，对较为底层的一些基础知识会慢慢淡化，遂通过此书做补全与复习。
 
 # 第1章 文件I/O
 本章主要介绍了内核提供的一些系统调用及其用法，介绍了unix系统文件的结构，为何说“一切皆fd”，
@@ -258,18 +258,58 @@ popen 函数做的就是：fork子进程执行shell命令，然后创建 pipe �
 
 ## 消息队列 Message Queue <sys/msg.h>
 工程中一般自己实现，略
-## 信号量 Semphore <sys/sem.h>
-condition更香，略
-## 共享内存 Shared Memory <sys/shm.h>
-多个进程共同将1块实际的内存空间映射到自己的虚拟地址空间中，零拷贝，听着就香
 
-什么！你需要用你家信号量来控制？我还是看隔壁POSIX标准吧
+## 信号量 Semaphore <sys/sem.h>
+condition更香，略
+
+## 共享内存 Shared Memory <sys/shm.h>
+多个进程共同将1块实际的内存空间映射到自己的虚拟地址空间中，零拷贝，听着就香，但我还是看隔壁POSIX标准吧
 
 综上所述，略
 
 ---
 
 # 第11章 进程间通信：POSIX IPC
+> 熟悉的fd出现了，头文件的名字都变得正式了起来
+
+## 消息队列 Message Queue <mqueue.h>
+工程中依然一般自己实现，略
+
+## 信号量 Semaphore <semaphore.h>
+信号量的使用需要掌握 PV原语，
+
+P：wait 阻塞等待，当然也有 trywait 非阻塞，timedwait 超时不等
+
+V：post 通知唤醒阻塞进/线程
+
+作者锐评：
+
+<img width="847" height="196" alt="image" src="https://github.com/user-attachments/assets/dd20bc99-0e1c-4672-9d34-9a4dbba45457" />
+
+<img width="708" height="482" alt="image" src="https://github.com/user-attachments/assets/684df0a2-fe76-41fe-95af-5aed33a9d4a7" />
+
+## mmap：Memory-Map 内存映射，POSIX标准高性能的秘密武器
+
+根据有无文件关联，分为基于文件的映射和匿名映射(malloc)
+
+根据是否在进程间共享，可分为私有(fork)和共享(IPC)
+
+Usage | desc
+:-: | -
+代替read/write操作文件 | 大部分情况下性能可能不如前者，因为可能引发大量的缺页中断，而前者一般有独立缓存
+IPC | 通过 fcntl 提供的记录锁做到读写请求分离，零拷贝的操作同一款内存数据，前提是共享的内存映射
+
+内存映射是通过页缓存（page cache）实现的，但具体的逻辑得深究内核代码，这里只做大致了解，核心是COW
+
+## 共享内存 Shared Memory <sys/mman.h>
+可以动态调整内存空间，因为是fd，所以可以使用文件相关的方法控制
+
+本质是在 tmpfs 下（挂载位于/dev/shm）创建文件，通过 mmap 使用内存区域
+
+> mount打印：tmpfs on /dev/shm type tmpfs (rw,nosuid,nodev)
+
+---
+
 # 第12章 网络通信：连接的建立
 # 第13章 网络通信：数据报文的发送
 # 第14章 网络通信：数据报文的接收

@@ -191,6 +191,13 @@ prctl：进程/线程属性设置，但它是Linux特有的，类似fcntl，ioct
 
 线程栈默认大小：ulimit -s / ulimit stack size
 
+Linux 使用 futex(fast userspace mutex) 系统调用控制互斥锁，避免了在无线程竞争状态下不必要的系统调用消耗(用户态<->内核态)
+
+如果临界区竞争不激烈，忙等待（自旋锁）的性能表现可能会好于互斥锁，因为可以减少系统调用的次数
+
+<img width="722" height="364" alt="image" src="https://github.com/user-attachments/assets/e10d1698-6d67-405b-8b2a-0bec33be8b6f" />
+
+---
 
 # 第8章 理解Linux线程（2）
 # 第9章 进程间通信：管道

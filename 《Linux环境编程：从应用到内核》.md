@@ -1,4 +1,4 @@
-> 工作中经常用的都是脚本语言，久而久之，对较为底层的一些基础知识会慢慢淡化，遂通过此书做补全与复习。
+<img width="722" height="128" alt="image" src="https://github.com/user-attachments/assets/7acc029c-c789-4f5e-a3bb-49c93c162f17" />> 工作中经常用的都是脚本语言，久而久之，对较为底层的一些基础知识会慢慢淡化，遂通过此书做补全与复习。
 
 # 第1章 文件I/O
 本章主要介绍了内核提供的一些系统调用及其用法，介绍了unix系统文件的结构，为何说“一切皆fd”，
@@ -208,9 +208,12 @@ pthread_cancel 是一个风险系数较大的操作，非必要不使用，根�
 
 ## 线程局部变量 Thread-Local Storage(TLS) 
 > 这里讨论在线程外声明的变量，在线程函数声明的变量自然也是属于线程栈的空间，当然也是TLS
+
 1、NPTL设计的接口：允许最多1024个线程内的全局变量的声明，并且可以设计他们各自的释放钩子（类似析构函数），用法较为繁杂，略；
 
-2、__thread 关键字：GCC的标准，带有这个关键字的变量，在每个线程都会有独立的拷贝，生命周期直到线程退出，C11标准还引入了 thread_local 关键字
+2、__thread 关键字：GCC的标准，带有这个关键字的变量，在每个线程都会有独立的拷贝，生命周期直到线程退出
+
+C11标准还引入了 thread_local 关键字
 
 ## 线程与信号
 
@@ -218,12 +221,54 @@ pthread_cancel 是一个风险系数较大的操作，非必要不使用，根�
 
 没有一个线程相关函数是异步信号安全的，sigHandler 里面也不能调用任何 pthread_* 函数
 
-子线程会共享主线程的 sigHandler，但是 pthread_sigmask 可以自定义每个线程的信号掩码 ，pthread_kill/pthread_sigqueue 可以对线程发信号(区别同chap6)
+子线程会共享主线程的 sigHandler，但是 pthread_sigmask 可以自定义每个线程的信号掩码
+
+pthread_kill/pthread_sigqueue 可以对线程发信号（区别见 Chap.6）
 
 ---
 
 # 第9章 进程间通信：管道
+> 在实际应用中，为了更加实现更加复杂的功能，一般不会使用原生的pipe，而是通过自己组装各种库的数据结构建立一个
+ 管道默认大小在 /proc/sys/fs/pipe-max-size
+
+进程通信的方法，根据其目的可以大致分成2大类：通信 和 同步
+
+<img width="568" height="772" alt="image" src="https://github.com/user-attachments/assets/987de1be-73a4-42df-9677-27a057e4ff15" />
+
+管道是最早出现的进程间通信方法，常见就是在 shell 上通过 '|' 将1个进程的结果作为另1个进程的参数传入
+
+但管道一边是单向的，且是阅后即焚的，如果需要双向通信，需要双方各自建立1个单向管道
+
+为了不阻塞，一般会让一端的进程只写，关闭管道读端，另一边反之
+
+popen 函数做的就是：fork子进程执行shell命令，然后创建 pipe 将结果返回给父进程
+
+命名管道(FIFO)类似无名管道，现代实际工程中，基本都用万金油 socket 通信，这里先略过
+
+---
+
 # 第10章 进程间通信：System V IPC
+> 这种对象不遵循 Unix 的"一切皆文件"的设计逻辑，没有fd，无法使用I/O多路复用
+> 
+> 基本就宣告了在高并发方面的死亡，注定是一些小众玩法，值得仔细品尝的应该就只有共享内存
+> 
+> Gemeni 锐评：
+> 
+> <img width="722" height="128" alt="image" src="https://github.com/user-attachments/assets/8e3e9781-29c3-4010-afe6-efc2efb32419" />
+
+## 消息队列 Message Queue <sys/msg.h>
+工程中一般自己实现，略
+## 信号量 Semphore <sys/sem.h>
+condition更香，略
+## 共享内存 Shared Memory <sys/shm.h>
+多个进程共同将1块实际的内存空间映射到自己的虚拟地址空间中，零拷贝，听着就香
+
+什么！你需要用你家信号量来控制？我还是看隔壁POSIX标准吧
+
+综上所述，略
+
+---
+
 # 第11章 进程间通信：POSIX IPC
 # 第12章 网络通信：连接的建立
 # 第13章 网络通信：数据报文的发送

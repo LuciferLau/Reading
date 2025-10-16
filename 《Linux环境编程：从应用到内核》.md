@@ -311,6 +311,68 @@ IPC | 通过 fcntl 提供的记录锁做到读写请求分离，零拷贝的操�
 ---
 
 # 第12章 网络通信：连接的建立
+> 本章节开始就简述了 socket, bind, connect, listen, accept 等系统调用的底层实现（协议族为AF_INET的情况下）
+> 
+> 从 listen 源码可知 backlog 的默认值是128，可以通过 /proc/sys/net/core/somaxconn 配置:
+> <img width="518" height="364" alt="image" src="https://github.com/user-attachments/assets/23fbd478-c3f4-4afa-bc1f-a9ce66f21bed" />
+
+## TCP三次握手
+> 本人参考学习的内核代码基于 3.10 版本，其它版本可能会有部分区别
+
+首先，可以看看内核给TCP状态定的枚举：
+
+```c
+enum {
+	TCP_ESTABLISHED = 1,
+	TCP_SYN_SENT,
+	TCP_SYN_RECV,
+	TCP_FIN_WAIT1,
+	TCP_FIN_WAIT2,
+	TCP_TIME_WAIT,
+	TCP_CLOSE,
+	TCP_CLOSE_WAIT,
+	TCP_LAST_ACK,
+	TCP_LISTEN,
+	TCP_CLOSING,	/* Now a valid state */
+
+	TCP_MAX_STATES	/* Leave at the end! */
+};
+```
+
+为了便于实现面向对象和管理，从 socket 的结构体中可见
+
+连接状态被封装到 sock 中，外层只有不同协议都通用的连接状态标志 state
+
+```c
+typedef enum {
+	SS_FREE = 0,			/* not allocated		*/
+	SS_UNCONNECTED,			/* unconnected to any socket	*/
+	SS_CONNECTING,			/* in process of connecting	*/
+	SS_CONNECTED,			/* connected to socket		*/
+	SS_DISCONNECTING		/* in process of disconnecting	*/
+} socket_state;
+
+struct socket {
+	socket_state		state; //连接状态
+	...
+	struct sock		*sk; //协议族状态托管
+	const struct proto_ops	*ops; //协议族的接口实现
+};
+
+struct sock {
+	struct sock_common	__sk_common; //不同协议族的通用属性
+	...
+#define sk_state		__sk_common.skc_state //协议族状态变量
+	...
+};
+
+struct sock_common {
+	...
+	volatile unsigned char	skc_state; //状态是可能被多线程修改的
+	...
+};
+```
+
 # 第13章 网络通信：数据报文的发送
 # 第14章 网络通信：数据报文的接收
 # 第15章 编写安全无错代码

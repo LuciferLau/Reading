@@ -317,7 +317,7 @@ IPC | 通过 fcntl 提供的记录锁做到读写请求分离，零拷贝的操�
 > <img width="518" height="364" alt="image" src="https://github.com/user-attachments/assets/23fbd478-c3f4-4afa-bc1f-a9ce66f21bed" />
 
 ## TCP三次握手
-> 本人参考学习的内核代码基于 3.10 版本，其它版本可能会有部分区别
+> 本人参考学习的内核代码基于 3.10 版本，其它版本可能会有部分区别，这里讨论的都是不使用 fastopen 的基础情况
 
 首先，可以看看内核给TCP状态定的枚举：
 
@@ -372,6 +372,27 @@ struct sock_common {
 	...
 };
 ```
+
+### 1、客户端调用 connect，构造并发送 SYN 包(TCP_SYN_SENT)
+connect -> tcp_v4_connect -> tcp_connect
+
+-> tcp_transmit_skb，此时SYN包被放到IP层，等待对端机器接受处理（如果正常可达）
+
+### 2、服务端接受 SYN 数据，构造 SYN/ACK 包发回(TCP_SYN_RECV)
+ip_local_deliver_finish -> tcp_v4_rcv -> tcp_v4_do_rcv 
+
+-> tcp_rcv_state_process（列出了不同状态下的处理方式）-> tcp_v4_conn_request
+
+-> tcp_make_synack -> ip_build_and_send_pkt，SYN/ACK 包被放到IP层
+
+### 3、客户端接受 SYN 数据，构造 ACK 包发回
+前面4步完全相同，只是 tcp_rcv_state_process 的处理变为 tcp_rcv_synsent_state_process
+
+TCP_ECN_rcv_synack -> tcp_send_ack，ACK 包被放到IP层
+
+当服务端收到 ACK 后，就会执行 tcp_rcv_state_process 中 TCP_SYN_RECV 对应回调逻辑，将状态更新为 TCP_ESTABLISHED
+
+---
 
 # 第13章 网络通信：数据报文的发送
 # 第14章 网络通信：数据报文的接收
